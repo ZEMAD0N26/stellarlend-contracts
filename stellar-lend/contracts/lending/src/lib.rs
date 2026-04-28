@@ -95,6 +95,10 @@ pub use stellarlend_common::upgrade::{UpgradeError, UpgradeStage, UpgradeStatus}
 #[cfg(test)]
 mod borrow_test;
 #[cfg(test)]
+mod borrow_withdraw_adversarial_test;
+#[cfg(test)]
+mod borrow_withdraw_rounding_timing_test;
+#[cfg(test)]
 mod borrow_withdraw_sequence_adversarial_test;
 // cross_asset_test targets a different contract API; disabled until migrated
 // #[cfg(test)]

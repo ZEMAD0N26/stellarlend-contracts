@@ -1,15 +1,26 @@
-# Adversarial Test Implementation TODO
+# Adversarial Borrow-Withdraw Tests — Implementation Plan
 
-## Task
+## Goal
 Add adversarial tests that attempt to borrow and immediately withdraw collateral in ways that might exploit rounding, timing, or view inconsistencies. Ensure the contract rejects any path that would leave positions undercollateralized.
 
 ## Steps
 
-- [x] 1. Analyze existing codebase and adversarial tests
-- [x] 2. Identify gaps in realistic multi-step sequences with price changes
-- [x] 3. Create comprehensive test plan
-- [x] 4. Create `borrow_withdraw_sequence_adversarial_test.rs`
-- [x] 5. Update `lib.rs` to include new test module
-- [x] 6. Run tests — Rust toolchain not installed in this environment; tests should be run via `cargo test --package lending borrow_withdraw_sequence`
-- [x] 7. Update TODO with results
+### Step 1: Enable compilation of existing adversarial tests
+- [ ] Add `borrow_withdraw_adversarial_test` module to `lib.rs`
+- [ ] Fix `setup()` in `borrow_withdraw_adversarial_test.rs` to register assets
+
+### Step 2: Create new adversarial test file
+- [ ] Create `borrow_withdraw_rounding_timing_test.rs` with 23 new tests
+  - Rounding exploitation (6 tests)
+  - Timing attacks (5 tests)
+  - View inconsistency attacks (5 tests)
+  - Path isolation attacks (4 tests)
+  - Extreme value attacks (3 tests)
+
+### Step 3: Register new module in lib.rs
+- [ ] Add `borrow_withdraw_rounding_timing_test` to `lib.rs`
+
+### Step 4: Verify compilation and run tests
+- [ ] Run `cargo test` to verify everything compiles
+- [ ] Fix any compilation/compilation errors
 
