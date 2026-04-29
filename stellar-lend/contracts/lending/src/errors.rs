@@ -89,6 +89,8 @@ pub enum OracleError {
     NoPriceFeed = 5004,
     InvalidOracle = 5005,
     OraclePaused = 5006,
+    OracleDecimalMismatch = 5007,
+    OracleDecimalsNotConfigured = 5008,
 }
 
 // ── Cross-Asset Operations (6000–6999) ────────────────────────────────

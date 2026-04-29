@@ -68,15 +68,15 @@ fn test_sudden_10x_price_increase_improves_health_factor() {
 
     env.ledger().with_mut(|li| li.timestamp = 0);
     // Baseline: collateral = $1.00
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
-    client.update_price_feed(&admin, &debt_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8);
 
     client.borrow(&user, &debt_asset, &10_000, &collateral_asset, &20_000);
 
     let hf_before = client.get_health_factor(&user);
 
     // Oracle reports 10× price jump: collateral = $10.00
-    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000, &8);
 
     let hf_after = client.get_health_factor(&user);
     assert!(
@@ -99,8 +99,8 @@ fn test_sudden_10x_price_crash_makes_position_unhealthy() {
 
     env.ledger().with_mut(|li| li.timestamp = 0);
     // Set collateral price high enough to make the borrow valid
-    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000); // $10
-    client.update_price_feed(&admin, &debt_asset, &100_000_000); // $1
+    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000, &8); // $10
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8); // $1
 
     client.borrow(&user, &debt_asset, &10_000, &collateral_asset, &20_000);
 
@@ -108,7 +108,7 @@ fn test_sudden_10x_price_crash_makes_position_unhealthy() {
     assert!(hf_before >= views::HEALTH_FACTOR_SCALE, "position should start healthy");
 
     // Collateral crashes 10×: $10 → $1
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
 
     let hf_after = client.get_health_factor(&user);
     assert!(
@@ -128,8 +128,8 @@ fn test_price_crash_triggers_liquidation_eligibility() {
     let user = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000); // $10
-    client.update_price_feed(&admin, &debt_asset, &100_000_000); // $1
+    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000, &8); // $10
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8); // $1
 
     // Borrow with moderate collateral cushion
     client.borrow(&user, &debt_asset, &50_000, &collateral_asset, &100_000);
@@ -139,7 +139,7 @@ fn test_price_crash_triggers_liquidation_eligibility() {
 
     // Crash collateral to $0.50 — now collateral value = 50_000, debt = 50_000
     // With threshold 80%: weighted collateral = 40_000 < debt 50_000 → unhealthy
-    client.update_price_feed(&admin, &collateral_asset, &50_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &50_000_000, &8);
 
     let liquidatable = client.get_max_liquidatable_amount(&user);
     assert!(
@@ -169,15 +169,15 @@ fn test_stale_primary_fallback_used_in_views() {
 
     env.ledger().with_mut(|li| li.timestamp = 0);
     // Primary: $1.00 for both
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
-    client.update_price_feed(&admin, &debt_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8);
 
     client.borrow(&user, &debt_asset, &10_000, &collateral_asset, &20_000);
 
     // Primary goes stale; fallback (at t=4000) has higher collateral price $2.00
     env.ledger().with_mut(|li| li.timestamp = 4000);
-    client.update_price_feed(&fallback, &collateral_asset, &200_000_000);
-    client.update_price_feed(&fallback, &debt_asset, &100_000_000);
+    client.update_price_feed(&fallback, &collateral_asset, &200_000_000, &8);
+    client.update_price_feed(&fallback, &debt_asset, &100_000_000, &8);
 
     // get_price should use fallback
     assert_eq!(client.get_price(&collateral_asset), 200_000_000);
@@ -204,14 +204,14 @@ fn test_fallback_price_consistency_across_views() {
     client.set_fallback_oracle(&admin, &collateral_asset, &fallback);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
-    client.update_price_feed(&admin, &debt_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8);
 
     client.borrow(&user, &debt_asset, &5_000, &collateral_asset, &10_000);
 
     // Move past primary staleness, write fresh fallback at $3.00
     env.ledger().with_mut(|li| li.timestamp = 5000);
-    client.update_price_feed(&fallback, &collateral_asset, &300_000_000);
+    client.update_price_feed(&fallback, &collateral_asset, &300_000_000, &8);
 
     let price = client.get_price(&collateral_asset);
     let cv = client.get_collateral_value(&user);
@@ -335,13 +335,13 @@ fn test_attacker_cannot_poison_price_feed() {
     let attacker = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     let price_before = client.get_price(&asset);
 
     // Attacker tries to submit a manipulated price
     assert_eq!(
-        client.try_update_price_feed(&attacker, &asset, &1),
+        client.try_update_price_feed(&attacker, &asset, &1, &8),
         Err(Ok(OracleError::Unauthorized))
     );
 
@@ -361,10 +361,10 @@ fn test_fallback_oracle_cannot_poison_primary_slot() {
 
     env.ledger().with_mut(|li| li.timestamp = 0);
     client.set_fallback_oracle(&admin, &asset, &fallback);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // Fallback oracle writes to its own slot (fallback), not primary
-    client.update_price_feed(&fallback, &asset, &999_999_999);
+    client.update_price_feed(&fallback, &asset, &999_999_999, &8);
 
     // Primary slot must retain the original price
     env.as_contract(&contract_id, || {
@@ -417,15 +417,15 @@ fn test_zero_and_negative_price_rejected_via_api() {
     let (client, admin, asset, _) = setup(&env);
 
     assert_eq!(
-        client.try_update_price_feed(&admin, &asset, &0),
+        client.try_update_price_feed(&admin, &asset, &0, &8),
         Err(Ok(OracleError::InvalidPrice))
     );
     assert_eq!(
-        client.try_update_price_feed(&admin, &asset, &-1),
+        client.try_update_price_feed(&admin, &asset, &-1, &8),
         Err(Ok(OracleError::InvalidPrice))
     );
     assert_eq!(
-        client.try_update_price_feed(&admin, &asset, &i128::MIN),
+        client.try_update_price_feed(&admin, &asset, &i128::MIN, &8),
         Err(Ok(OracleError::InvalidPrice))
     );
 }
@@ -456,8 +456,8 @@ fn test_health_factor_at_exact_threshold_not_liquidatable() {
     // collateral_value = 20_000 * 62_500_000 / 1e8 = 12_500
     // debt_value       = 10_000 * 100_000_000 / 1e8 = 10_000
     // hf = (12_500 * 8000 / 10000) * 10000 / 10_000 = 10_000
-    client.update_price_feed(&admin, &collateral_asset, &62_500_000);
-    client.update_price_feed(&admin, &debt_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &62_500_000, &8);
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8);
 
     let hf = client.get_health_factor(&user);
     assert_eq!(hf, views::HEALTH_FACTOR_SCALE, "hf must equal threshold exactly");
@@ -486,8 +486,8 @@ fn test_health_factor_just_below_threshold_is_liquidatable() {
     // collateral_value = 20_000 * 62_000_000 / 1e8 = 12_400
     // debt_value       = 10_000 * 100_000_000 / 1e8 = 10_000
     // hf = (12_400 * 8000 / 10000) * 10000 / 10_000 = 9920 < 10000
-    client.update_price_feed(&admin, &collateral_asset, &62_000_000);
-    client.update_price_feed(&admin, &debt_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &62_000_000, &8);
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8);
 
     let hf = client.get_health_factor(&user);
     assert!(hf < views::HEALTH_FACTOR_SCALE, "hf={} should be below threshold", hf);
@@ -509,14 +509,14 @@ fn test_oracle_paused_blocks_updates_but_reads_persist() {
     let (client, admin, asset, _) = setup(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // Pause oracle
     client.set_oracle_paused(&admin, &true);
 
     // New update is blocked
     assert_eq!(
-        client.try_update_price_feed(&admin, &asset, &200_000_000),
+        client.try_update_price_feed(&admin, &asset, &200_000_000, &8),
         Err(Ok(OracleError::OraclePaused))
     );
 
@@ -525,7 +525,7 @@ fn test_oracle_paused_blocks_updates_but_reads_persist() {
 
     // Unpause — updates resume
     client.set_oracle_paused(&admin, &false);
-    client.update_price_feed(&admin, &asset, &200_000_000);
+    client.update_price_feed(&admin, &asset, &200_000_000, &8);
     assert_eq!(client.get_price(&asset), 200_000_000);
 }
 
@@ -558,8 +558,8 @@ fn test_cross_asset_collateral_crash_debt_stable() {
     let user = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000); // $10
-    client.update_price_feed(&admin, &debt_asset, &100_000_000); // $1
+    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000, &8); // $10
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8); // $1
 
     // Borrow at comfortable ratio
     client.borrow(&user, &debt_asset, &20_000, &collateral_asset, &30_000);
@@ -572,7 +572,7 @@ fn test_cross_asset_collateral_crash_debt_stable() {
     assert!(hf_before >= views::HEALTH_FACTOR_SCALE);
 
     // Debt oracle stays at $1; collateral crashes to $0.10 (10× drop)
-    client.update_price_feed(&admin, &collateral_asset, &10_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &10_000_000, &8);
 
     let cv_after = client.get_collateral_value(&user);
     let dv_after = client.get_debt_value(&user);
@@ -596,15 +596,15 @@ fn test_cross_asset_debt_price_spike_worsens_health_factor() {
     let user = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000); // $10
-    client.update_price_feed(&admin, &debt_asset, &100_000_000); // $1
+    client.update_price_feed(&admin, &collateral_asset, &1_000_000_000, &8); // $10
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8); // $1
 
     client.borrow(&user, &debt_asset, &10_000, &collateral_asset, &20_000);
 
     let hf_before = client.get_health_factor(&user);
 
     // Debt asset price 5× — debt value increases, health factor worsens
-    client.update_price_feed(&admin, &debt_asset, &500_000_000); // $5
+    client.update_price_feed(&admin, &debt_asset, &500_000_000, &8); // $5
 
     let hf_after = client.get_health_factor(&user);
     assert!(
@@ -628,11 +628,11 @@ fn test_stale_oracle_does_not_contaminate_other_assets() {
     let asset2 = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset1, &100_000_000);
+    client.update_price_feed(&admin, &asset1, &100_000_000, &8);
 
     // asset2 gets a fresh price at t=2000
     env.ledger().with_mut(|li| li.timestamp = 2000);
-    client.update_price_feed(&admin, &asset2, &200_000_000);
+    client.update_price_feed(&admin, &asset2, &200_000_000, &8);
 
     // Advance past asset1's staleness but not asset2's
     env.ledger().with_mut(|li| li.timestamp = 4500);
@@ -658,14 +658,14 @@ fn test_stale_collateral_zero_value_fresh_debt_correct_value() {
     let user = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
-    client.update_price_feed(&admin, &debt_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8);
 
     client.borrow(&user, &debt_asset, &10_000, &collateral_asset, &20_000);
 
     // Let collateral oracle go stale; refresh debt oracle
     env.ledger().with_mut(|li| li.timestamp = 4500);
-    client.update_price_feed(&admin, &debt_asset, &100_000_000);
+    client.update_price_feed(&admin, &debt_asset, &100_000_000, &8);
 
     // Collateral value must be 0 (stale oracle)
     assert_eq!(client.get_collateral_value(&user), 0);

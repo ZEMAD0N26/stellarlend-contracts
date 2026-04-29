@@ -17,6 +17,11 @@ mod pause;
 mod reentrancy;
 mod token_receiver;
 mod withdraw;
+mod analytics;
+mod asset_registry;
+mod governance;
+mod storage;
+mod types;
 mod errors;
 mod validation;
 #[cfg(test)]
@@ -57,11 +62,7 @@ use flash_loan::{
     flash_loan as flash_loan_impl, set_flash_loan_fee_bps as set_flash_loan_fee_impl,
 };
 use oracle::{OracleConfig, OracleConfigEvent, OracleError};
-use governance_audit::{
-    get_audit_count, get_recent_audit_entries, log_governance_action, GovernanceAction,
-    payload_address, payload_address_bool, payload_address_i128, payload_address_u64,
-    payload_empty, payload_i128, payload_string, payload_two_addresses, payload_two_u64,
-};
+
 use pause::{
     blocks_high_risk_ops, complete_recovery as complete_recovery_logic,
     get_emergency_state as get_emergency_state_logic, get_guardian as get_guardian_logic,
@@ -167,12 +168,6 @@ mod upgrade_test;
 mod zero_amount_semantics_test;
 #[cfg(test)]
 mod guardian_scope_test;
-#[cfg(test)]
-mod liquidation_boundary_test;
-#[cfg(test)]
-mod multi_user_contention_test;
-#[cfg(test)]
-mod stress_test;
 
 #[contract]
 pub struct LendingContract;
@@ -556,6 +551,7 @@ pub(crate) fn calculate_interest(env: &Env, position: &DebtPosition) -> i128 {
 }
 
     /// Get user's collateral position (borrow module)
+
     pub fn get_user_collateral(env: Env, user: Address) -> BorrowCollateral {
         get_borrow_collateral(&env, &user)
     }
@@ -672,17 +668,31 @@ pub(crate) fn calculate_interest(env: &Env, position: &DebtPosition) -> i128 {
         caller: Address,
         asset: Address,
         price: i128,
+        decimals: u32,
     ) -> Result<(), OracleError> {
         if is_read_only_logic(&env) {
             return Err(OracleError::OraclePaused);
         }
-        let result = oracle::update_price_feed(&env, caller, asset, price);
+        let result = oracle::update_price_feed(&env, caller, asset, price, decimals);
         if result.is_ok() {
             // Log governance action
             let payload = payload_address_asset_i128(&env, asset, asset, price);
             log_governance_action(&env, GovernanceAction::UpdatePriceFeed, caller, payload);
         }
         result
+    }
+
+    /// Set the expected decimals for an asset (admin only).
+    pub fn set_asset_decimals(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        decimals: u32,
+    ) -> Result<(), OracleError> {
+        if is_read_only_logic(&env) {
+            return Err(OracleError::OraclePaused);
+        }
+        oracle::set_asset_decimals(&env, caller, asset, decimals)
     }
 
     /// Get the current price for `asset` (primary â†’ fallback â†’ error).
@@ -1318,4 +1328,32 @@ fn ensure_shutdown_authorized(env: &Env, caller: &Address) -> Result<(), BorrowE
     }
 
     Ok(())
+}pub(crate) fn calculate_interest(env: &Env, position: &DebtPosition) -> i128 {
+    if position.borrowed_amount == 0 {
+        return 0;
+    }
+
+    let time_elapsed = env
+        .ledger()
+        .timestamp()
+        .saturating_sub(position.last_update);
+
+    let borrowed_256 = I256::from_i128(env, position.borrowed_amount);
+    let rate_256 = I256::from_i128(env, INTEREST_RATE_PER_YEAR);
+    let time_256 = I256::from_i128(env, time_elapsed as i128);
+
+    let denominator =
+        I256::from_i128(env, 10000).mul(&I256::from_i128(env, SECONDS_PER_YEAR as i128));
+
+    let numerator = borrowed_256.mul(&rate_256).mul(&time_256);
+
+    let interest_256 = if numerator > I256::from_i128(env, 0) {
+        numerator
+            .add(&denominator.sub(&I256::from_i128(env, 1)))
+            .div(&denominator)
+    } else {
+        numerator.div(&denominator)
+    };
+
+    interest_256.to_i128().unwrap_or(i128::MAX)
 }

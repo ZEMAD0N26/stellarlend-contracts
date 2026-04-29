@@ -198,7 +198,7 @@ fn test_get_price_per_asset_exact_boundary_valid() {
     client.set_asset_max_staleness(&admin, &asset, &120);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     env.ledger().with_mut(|li| li.timestamp = 120);
     assert_eq!(client.get_price(&asset), 100_000_000);
@@ -214,7 +214,7 @@ fn test_get_price_per_asset_one_second_past_threshold_stale() {
     client.set_asset_max_staleness(&admin, &asset, &120);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     env.ledger().with_mut(|li| li.timestamp = 121);
     assert_eq!(
@@ -234,7 +234,7 @@ fn test_get_price_per_asset_tighter_than_global() {
     client.set_asset_max_staleness(&admin, &asset, &60);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // t=200: stale under per-asset (60s) but would be fresh under global (3600s)
     env.ledger().with_mut(|li| li.timestamp = 200);
@@ -255,7 +255,7 @@ fn test_get_price_per_asset_looser_than_global() {
     client.set_asset_max_staleness(&admin, &asset, &7200);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // t=5000: stale under global (3600s) but fresh under per-asset (7200s)
     env.ledger().with_mut(|li| li.timestamp = 5000);
@@ -273,7 +273,7 @@ fn test_get_price_reverts_to_global_after_clear() {
     client.set_asset_max_staleness(&admin, &asset, &7200);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // t=5000: fresh under per-asset (7200s)
     env.ledger().with_mut(|li| li.timestamp = 5000);
@@ -299,7 +299,7 @@ fn test_set_asset_max_staleness_update_takes_effect_immediately() {
     client.set_asset_max_staleness(&admin, &asset, &7200);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // t=5000: fresh under 7200s
     env.ledger().with_mut(|li| li.timestamp = 5000);
@@ -331,8 +331,8 @@ fn test_per_asset_staleness_isolated_from_other_assets() {
     client.set_asset_max_staleness(&admin, &asset1, &60);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset1, &100_000_000);
-    client.update_price_feed(&admin, &asset2, &200_000_000);
+    client.update_price_feed(&admin, &asset1, &100_000_000, &8);
+    client.update_price_feed(&admin, &asset2, &200_000_000, &8);
 
     // t=200: asset1 stale (60s), asset2 fresh (3600s)
     env.ledger().with_mut(|li| li.timestamp = 200);
@@ -361,8 +361,8 @@ fn test_cross_asset_different_per_asset_thresholds() {
     client.set_asset_max_staleness(&admin, &volatile, &3600);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &stablecoin, &100_000_000);
-    client.update_price_feed(&admin, &volatile, &50_000_000_000i128);
+    client.update_price_feed(&admin, &stablecoin, &100_000_000, &8);
+    client.update_price_feed(&admin, &volatile, &50_000_000_000i128, &8);
 
     // t=30: both fresh
     env.ledger().with_mut(|li| li.timestamp = 30);
@@ -406,10 +406,10 @@ fn test_fallback_respects_per_asset_staleness_fresh() {
 
     // Primary written at t=0, fallback at t=50
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     env.ledger().with_mut(|li| li.timestamp = 50);
-    client.update_price_feed(&fallback, &asset, &101_000_000);
+    client.update_price_feed(&fallback, &asset, &101_000_000, &8);
 
     // t=130: primary stale (age=130 > 120), fallback fresh (age=80 ≤ 120)
     env.ledger().with_mut(|li| li.timestamp = 130);
@@ -471,7 +471,7 @@ fn test_collateral_value_zero_when_per_asset_staleness_exceeded() {
     client.set_asset_max_staleness(&admin, &collateral_asset, &60);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
     client.borrow(&user, &borrow_asset, &10_000, &collateral_asset, &20_000);
 
     // t=100: price stale under per-asset (60s) → collateral value = 0
@@ -492,7 +492,7 @@ fn test_collateral_value_nonzero_within_per_asset_threshold() {
     client.set_asset_max_staleness(&admin, &collateral_asset, &300);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
     client.borrow(&user, &borrow_asset, &10_000, &collateral_asset, &20_000);
 
     // t=200: within 300s threshold → value = 20_000

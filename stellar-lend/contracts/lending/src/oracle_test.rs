@@ -184,7 +184,7 @@ fn test_update_price_feed_admin_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, admin, asset, _cid) = setup(&env);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn test_update_price_feed_primary_oracle_succeeds() {
     let oracle = Address::generate(&env);
 
     client.set_primary_oracle(&admin, &asset, &oracle);
-    client.update_price_feed(&oracle, &asset, &100_000_000);
+    client.update_price_feed(&oracle, &asset, &100_000_000, &8);
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn test_update_price_feed_fallback_oracle_succeeds() {
     let fallback = Address::generate(&env);
 
     client.set_fallback_oracle(&admin, &asset, &fallback);
-    client.update_price_feed(&fallback, &asset, &100_000_000);
+    client.update_price_feed(&fallback, &asset, &100_000_000, &8);
 }
 
 #[test]
@@ -217,7 +217,7 @@ fn test_update_price_feed_unauthorized_stranger() {
     let stranger = Address::generate(&env);
 
     assert_eq!(
-        client.try_update_price_feed(&stranger, &asset, &100_000_000),
+        client.try_update_price_feed(&stranger, &asset, &100_000_000, &8),
         Err(Ok(OracleError::Unauthorized))
     );
 }
@@ -229,7 +229,7 @@ fn test_update_price_feed_zero_price_rejected() {
     let (client, admin, asset, _cid) = setup(&env);
 
     assert_eq!(
-        client.try_update_price_feed(&admin, &asset, &0),
+        client.try_update_price_feed(&admin, &asset, &0, &8),
         Err(Ok(OracleError::InvalidPrice))
     );
 }
@@ -241,7 +241,7 @@ fn test_update_price_feed_negative_price_rejected() {
     let (client, admin, asset, _cid) = setup(&env);
 
     assert_eq!(
-        client.try_update_price_feed(&admin, &asset, &-1),
+        client.try_update_price_feed(&admin, &asset, &-1, &8),
         Err(Ok(OracleError::InvalidPrice))
     );
 }
@@ -255,7 +255,7 @@ fn test_fallback_oracle_writes_to_fallback_slot_only() {
     let fallback = Address::generate(&env);
 
     client.set_fallback_oracle(&admin, &asset, &fallback);
-    client.update_price_feed(&fallback, &asset, &100_000_000);
+    client.update_price_feed(&fallback, &asset, &100_000_000, &8);
 
     // Primary slot should be empty; fallback slot should have the price.
     env.as_contract(&contract_id, || {
@@ -303,7 +303,7 @@ fn test_get_price_at_exact_staleness_boundary_valid() {
     let (client, admin, asset, _cid) = setup(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // Exactly at default threshold (3600s)
     env.ledger().with_mut(|li| li.timestamp = 3600);
@@ -318,7 +318,7 @@ fn test_get_price_one_second_past_threshold_stale() {
     let (client, admin, asset, _cid) = setup(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     env.ledger().with_mut(|li| li.timestamp = 3601);
     assert_eq!(
@@ -342,7 +342,7 @@ fn test_get_price_custom_staleness_threshold() {
     );
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // At exactly 60s — valid
     env.ledger().with_mut(|li| li.timestamp = 60);
@@ -397,13 +397,13 @@ fn test_get_price_fallback_used_when_primary_stale() {
     client.set_fallback_oracle(&admin, &asset, &fallback);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 
     // Move past staleness threshold
     env.ledger().with_mut(|li| li.timestamp = 4000);
 
     // Submit fresh fallback price
-    client.update_price_feed(&fallback, &asset, &105_000_000);
+    client.update_price_feed(&fallback, &asset, &105_000_000, &8);
 
     assert_eq!(client.get_price(&asset), 105_000_000);
 }
@@ -418,7 +418,7 @@ fn test_get_price_fallback_used_when_primary_missing() {
 
     env.ledger().with_mut(|li| li.timestamp = 1000);
     client.set_fallback_oracle(&admin, &asset, &fallback);
-    client.update_price_feed(&fallback, &asset, &99_000_000);
+    client.update_price_feed(&fallback, &asset, &99_000_000, &8);
 
     assert_eq!(client.get_price(&asset), 99_000_000);
 }
@@ -463,8 +463,8 @@ fn test_get_price_both_stale_returns_stale_price() {
     client.set_fallback_oracle(&admin, &asset, &fallback);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset, &100_000_000);
-    client.update_price_feed(&fallback, &asset, &105_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
+    client.update_price_feed(&fallback, &asset, &105_000_000, &8);
 
     env.ledger().with_mut(|li| li.timestamp = 5000);
 
@@ -487,7 +487,7 @@ fn test_update_price_feed_paused_rejected() {
     client.set_oracle_paused(&admin, &true);
 
     assert_eq!(
-        client.try_update_price_feed(&admin, &asset, &100_000_000),
+        client.try_update_price_feed(&admin, &asset, &100_000_000, &8),
         Err(Ok(OracleError::OraclePaused))
     );
 }
@@ -501,7 +501,7 @@ fn test_update_price_feed_after_unpause_succeeds() {
     client.set_oracle_paused(&admin, &true);
     client.set_oracle_paused(&admin, &false);
 
-    client.update_price_feed(&admin, &asset, &100_000_000);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8);
 }
 
 #[test]
@@ -529,10 +529,10 @@ fn test_multiple_assets_independent_staleness() {
     let asset2 = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &asset1, &100_000_000);
+    client.update_price_feed(&admin, &asset1, &100_000_000, &8);
 
     env.ledger().with_mut(|li| li.timestamp = 2000);
-    client.update_price_feed(&admin, &asset2, &200_000_000);
+    client.update_price_feed(&admin, &asset2, &200_000_000, &8);
 
     // Move to where asset1 is stale but asset2 is not
     env.ledger().with_mut(|li| li.timestamp = 4000);
@@ -575,7 +575,7 @@ fn test_collateral_value_with_fresh_price() {
 
     env.ledger().with_mut(|li| li.timestamp = 0);
     // Price = 1.0 (100_000_000 with 8 decimals)
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
 
     client.borrow(&user, &borrow_asset, &10_000, &collateral_asset, &20_000);
 
@@ -594,7 +594,7 @@ fn test_collateral_value_zero_when_price_stale() {
     let collateral_asset = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 0);
-    client.update_price_feed(&admin, &collateral_asset, &100_000_000);
+    client.update_price_feed(&admin, &collateral_asset, &100_000_000, &8);
     client.borrow(&user, &borrow_asset, &10_000, &collateral_asset, &20_000);
 
     // Move past staleness threshold

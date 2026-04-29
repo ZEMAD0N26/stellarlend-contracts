@@ -79,6 +79,29 @@ pub enum OracleKey {
     /// Per-asset maximum staleness override (seconds).
     /// When present, takes precedence over the global `Config.max_staleness_seconds`.
     AssetStaleness(Address),
+    /// Per-asset expected decimals for price updates.
+    AssetDecimals(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleConfig {
+    pub max_staleness_seconds: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleConfigEvent {
+    pub max_staleness_seconds: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceFeed {
+    pub price: i128,
+    pub last_updated: u64,
+    pub oracle: Address,
+    pub decimals: u32,
 }
 
 // ── Core state structs ───────────────────────────────────────────────────────
@@ -101,6 +124,31 @@ pub struct MarketState {
     pub bad_debt: i128,
     pub is_active: bool,
     pub is_frozen: bool, // frozen during emergency shutdown
+}
+
+fn get_config(env: &Env) -> OracleConfig {
+    env.storage()
+        .persistent()
+        .get::<OracleKey, OracleConfig>(&OracleKey::Config)
+        .unwrap_or(OracleConfig {
+            max_staleness_seconds: 3600, // 1 hour default
+        })
+}
+
+pub fn configure_oracle(
+    env: &Env,
+    caller: Address,
+    config: OracleConfig,
+) -> Result<(), OracleError> {
+    require_admin_caller(env, &caller)?;
+    caller.require_auth();
+
+    if config.max_staleness_seconds == 0 {
+        return Err(OracleError::InvalidPrice);
+    }
+
+    env.storage().persistent().set(&OracleKey::Config, &config);
+    Ok(())
 }
 
 /// Return the effective max-staleness for `asset`.
@@ -181,6 +229,7 @@ pub fn update_price_feed(
     caller: Address,
     asset: Address,
     price: i128,
+    decimals: u32,
 ) -> Result<(), OracleError> {
     // Pause check
     if env
@@ -193,6 +242,18 @@ pub fn update_price_feed(
     }
 
     validate_price(price)?;
+
+    // Validation: Ensure the provided decimals match the configured decimals for the asset.
+    let expected_decimals = env
+        .storage()
+        .persistent()
+        .get::<OracleKey, u32>(&OracleKey::AssetDecimals(asset.clone()))
+        .ok_or(OracleError::OracleDecimalsNotConfigured)?;
+
+    if decimals != expected_decimals {
+        return Err(OracleError::OracleDecimalMismatch);
+    }
+
     caller.require_auth();
 
     let admin = get_admin(env).ok_or(OracleError::Unauthorized)?;
@@ -218,6 +279,7 @@ pub fn update_price_feed(
         price,
         last_updated: env.ledger().timestamp(),
         oracle: caller.clone(),
+        decimals,
     };
 
     if is_fallback && !is_admin && !is_primary {
@@ -379,4 +441,36 @@ pub fn set_oracle_paused(env: &Env, caller: Address, paused: bool) -> Result<(),
     caller.require_auth();
     env.storage().persistent().set(&OracleKey::OraclePaused, &paused);
     Ok(())
+}
+
+/// Set the expected decimals for price updates of `asset`. Admin only.
+///
+/// This configuration is used to validate that callers of `update_price_feed`
+/// are using the correct unit scaling, preventing misconfigurations that
+/// could break collateral valuation.
+///
+/// # Errors
+/// - `Unauthorized` — caller is not the protocol admin.
+pub fn set_asset_decimals(
+    env: &Env,
+    caller: Address,
+    asset: Address,
+    decimals: u32,
+) -> Result<(), OracleError> {
+    require_admin_caller(env, &caller)?;
+    caller.require_auth();
+
+    env.storage()
+        .persistent()
+        .set(&OracleKey::AssetDecimals(asset), &decimals);
+
+    Ok(())
+}
+
+/// Return the expected decimals for `asset`.
+pub fn get_asset_decimals(env: &Env, asset: &Address) -> Result<u32, OracleError> {
+    env.storage()
+        .persistent()
+        .get::<OracleKey, u32>(&OracleKey::AssetDecimals(asset.clone()))
+        .ok_or(OracleError::OracleDecimalsNotConfigured)
 }

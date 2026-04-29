@@ -6,7 +6,9 @@
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use soroban_sdk::{Address, Env, String, Vec};
+    use std::vec;
     use crate::governance_audit::{
         log_governance_action, get_recent_audit_entries, get_audit_count,
         GovernanceAction, GovernancePayload, MAX_AUDIT_ENTRIES,

@@ -121,8 +121,8 @@ fn test_hardened_primary_swap_updates_valuation() {
     client.set_primary_oracle(&admin, &collateral_asset, &oracle_a);
 
     env.ledger().with_mut(|li| li.timestamp = 100);
-    client.update_price_feed(&oracle_a, &asset, &100_000_000);
-    client.update_price_feed(&oracle_a, &collateral_asset, &100_000_000);
+    client.update_price_feed(&oracle_a, &asset, &100_000_000, &8);
+    client.update_price_feed(&oracle_a, &collateral_asset, &100_000_000, &8);
 
     client.borrow(&user, &asset, &10_000, &collateral_asset, &20_000);
 
@@ -130,7 +130,7 @@ fn test_hardened_primary_swap_updates_valuation() {
 
     // Swap Primary Oracle
     client.set_primary_oracle(&admin, &collateral_asset, &oracle_b);
-    client.update_price_feed(&oracle_b, &collateral_asset, &50_000_000); // Price drops to 0.5
+    client.update_price_feed(&oracle_b, &collateral_asset, &50_000_000, &8); // Price drops to 0.5
 
     // Value should reflect new primary oracle
     assert_eq!(client.get_collateral_value(&user), 10_000);
@@ -162,7 +162,7 @@ fn test_hardened_oracle_preempts_legacy_oracle() {
     // Add Hardened Oracle with different price
     let hardened_oracle = Address::generate(&env);
     client.set_primary_oracle(&admin, &collateral_asset, &hardened_oracle);
-    client.update_price_feed(&hardened_oracle, &collateral_asset, &150_000_000); // 1.5
+    client.update_price_feed(&hardened_oracle, &collateral_asset, &150_000_000, &8); // 1.5
 
     // Should use 1.5 instead of 1.0
     assert_eq!(client.get_collateral_value(&user), 30_000);
@@ -183,8 +183,8 @@ fn test_liquidation_safety_triggered_by_oracle_swap() {
     client.set_primary_oracle(&admin, &collateral_asset, &oracle_a);
 
     env.ledger().with_mut(|li| li.timestamp = 100);
-    client.update_price_feed(&oracle_a, &asset, &100_000_000);
-    client.update_price_feed(&oracle_a, &collateral_asset, &100_000_000);
+    client.update_price_feed(&oracle_a, &asset, &100_000_000, &8);
+    client.update_price_feed(&oracle_a, &collateral_asset, &100_000_000, &8);
 
     // Collateral 20k, Debt 10k. LT 80% -> Weighted 16k. HF 1.6 (Healthy)
     client.borrow(&user, &asset, &10_000, &collateral_asset, &20_000);
@@ -193,7 +193,7 @@ fn test_liquidation_safety_triggered_by_oracle_swap() {
     // Swap to Oracle B with crash price for collateral
     let oracle_b = Address::generate(&env);
     client.set_primary_oracle(&admin, &collateral_asset, &oracle_b);
-    client.update_price_feed(&oracle_b, &collateral_asset, &50_000_000); // Crash to 0.5
+    client.update_price_feed(&oracle_b, &collateral_asset, &50_000_000, &8); // Crash to 0.5
 
     // Weighted = 20k * 0.5 * 0.8 = 8k. Debt 10k. HF = 0.8 (Liquidatable)
     assert_eq!(client.get_health_factor(&user), 8000);
@@ -260,7 +260,7 @@ fn test_stale_hardened_oracle_reverts_to_legacy_or_fails() {
     client.set_primary_oracle(&admin, &collateral_asset, &hardened_oracle);
 
     env.ledger().with_mut(|li| li.timestamp = 100);
-    client.update_price_feed(&hardened_oracle, &collateral_asset, &200_000_000);
+    client.update_price_feed(&hardened_oracle, &collateral_asset, &200_000_000, &8);
 
     client.borrow(&user, &asset, &10_000, &collateral_asset, &20_000);
     assert_eq!(client.get_collateral_value(&user), 40_000); // 20k * 2.0
