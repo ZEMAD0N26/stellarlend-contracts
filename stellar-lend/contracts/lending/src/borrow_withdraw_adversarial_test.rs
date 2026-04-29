@@ -45,6 +45,8 @@ fn setup(env: &Env) -> (LendingContractClient<'_>, Address, Address, Address, Ad
     let collateral_asset = Address::generate(env);
     client.initialize(&admin, &1_000_000_000, &1000);
     client.initialize_withdraw_settings(&100);
+    client.register_asset(&admin, &asset);
+    client.register_asset(&admin, &collateral_asset);
     (client, admin, user, asset, collateral_asset)
 }
 
