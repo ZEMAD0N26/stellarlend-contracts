@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod math_safety_test;
+mod supported_assets_view_test;
 #![no_std]
 #![allow(deprecated)]
 #![allow(clippy::absurd_extreme_comparisons)]
@@ -81,9 +82,9 @@ use views::{
     get_debt_value as view_debt_value, get_health_factor as view_health_factor,
     get_liquidation_incentive_amount as view_liquidation_incentive_amount,
     get_max_liquidatable_amount as view_max_liquidatable_amount,
-    get_user_position as view_user_position, UserPositionSummary,
+    get_user_position as view_user_position, get_supported_assets as view_get_supported_assets,
+    SupportedAssetInfo, UserPositionSummary,
 };
-
 use withdraw::{
     initialize_withdraw_settings as initialize_withdraw_logic, withdraw as withdraw_logic,
 };
@@ -227,6 +228,22 @@ impl LendingContract {
     /// Query whether an asset is registered (read-only).
     pub fn is_asset_registered(env: Env, asset: Address) -> bool {
         asset_registry::is_registered(&env, &asset)
+    }
+
+    /// Returns a paginated list of all supported (registered) assets and their
+    /// key parameters. Designed for frontend and indexer consumption.
+    ///
+    /// # Arguments
+    /// * `offset` — Zero-based start index into the full registered-asset list.
+    /// * `page_size` — Maximum entries to return. Capped at 20 per call.
+    ///
+    /// # Returns
+    /// A `Vec<SupportedAssetInfo>` — empty when `offset >= total registered assets`.
+    ///
+    /// # Security
+    /// Read-only. No state change. Bounded and deterministic.
+    pub fn get_supported_assets(env: Env, offset: u32, page_size: u32) -> Vec<SupportedAssetInfo> {
+        view_get_supported_assets(&env, offset, page_size)
     }
 
     /// Borrow assets against deposited collateral

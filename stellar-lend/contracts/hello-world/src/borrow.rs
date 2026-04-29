@@ -86,6 +86,10 @@ pub enum BorrowError {
     AssetNotEnabled = 9,
     /// Protocol is in read-only mode
     ReadOnlyMode = 10,
+    /// Asset is not registered in the protocol
+    AssetNotSupported = 11,
+    /// Registry cap reached; cannot register more assets
+    CapExceeded = 12,
 }
 
 // Minimum collateral ratio (in basis points, e.g., 15000 = 150%)

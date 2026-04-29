@@ -356,3 +356,78 @@ pub fn get_user_position(env: &Env, user: &Address) -> UserPositionSummary {
         health_factor,
     }
 }
+
++pub struct SupportedAssetInfo {
+    +    /// The asset's contract address.
+    +    pub asset: Address,
+    +    /// Loan-to-value ratio in basis points (e.g. 7500 = 75%).
+    +    pub ltv_bps: i128,
+    +    /// Liquidation threshold in basis points (e.g. 8000 = 80%).
+    +    pub liquidation_threshold_bps: i128,
+    +    /// Oracle / price-feed address configured for this asset.
+    +    pub price_feed: Address,
+    +    /// Maximum debt allowed for this asset (protocol debt ceiling).
+    +    pub debt_ceiling: i128,
+    +    /// Whether the asset is currently active / accepting new positions.
+    +    pub is_active: bool,
+    +}
+    +
+    +/// Returns up to `page_size` supported assets starting at `offset`.
+    +///
+    +/// Assets that have no `AssetParams` recorded (registered via the simple boolean
+    +/// path only) are included with zeroed numeric fields so the list stays consistent
+    +/// with `is_asset_registered`. Frontends should treat `is_active = false` as
+    +/// read-only.
+    +///
+    +/// # Pagination
+    +/// - `offset` — zero-based index into the full registered-asset list.
+    +/// - `page_size` — max entries to return; capped internally at 20 to bound
+    +///   ledger I/O per call. Pass `page_size = 20` and increment `offset` by 20
+    +///   to paginate through large registries.
+    +///
+    +/// Returns an empty `Vec` when `offset >= total registered assets`.
+    +///
+    +/// # Security
+    +/// Read-only; no state change. Bounded by `MAX_REGISTERED_ASSETS` on the
+    +/// registry side, and by the `page_size` cap here, so gas usage is deterministic.
+    +pub fn get_supported_assets(env: &Env, offset: u32, page_size: u32) -> Vec<SupportedAssetInfo> {
+    +    const MAX_PAGE: u32 = 20;
+    +    let capped = page_size.min(MAX_PAGE);
+    +    let all = asset_registry::list_registered(env);
+    +    let total = all.len();
+    +    let mut result: Vec<SupportedAssetInfo> = Vec::new(env);
+    +    if offset >= total {
+    +        return result;
+    +    }
+    +    let end = (offset + capped).min(total);
+    +    for i in offset..end {
+    +        let asset = all.get(i).unwrap();
+    +        // Try to load cross-asset params; fall back to zeroed entry so the
+    +        // list is always consistent with the boolean registry.
+    +        let params_opt: Option<AssetParams> = env
+    +            .storage()
+    +            .persistent()
+    +            .get(&crate::cross_asset::CrossAssetKey::AssetParams(asset.clone()));
+    +        let info = match params_opt {
+    +            Some(p) => SupportedAssetInfo {
+    +                asset: asset.clone(),
+    +                ltv_bps: p.ltv,
+    +                liquidation_threshold_bps: p.liquidation_threshold,
+    +                price_feed: p.price_feed,
+    +                debt_ceiling: p.debt_ceiling,
+    +                is_active: p.is_active,
+    +            },
+    +            None => SupportedAssetInfo {
+    +                asset: asset.clone(),
+    +                ltv_bps: 0,
+    +                liquidation_threshold_bps: 0,
+    +                price_feed: asset.clone(), // placeholder; no oracle configured
+    +                debt_ceiling: 0,
+    +                is_active: false,
+    +            },
+    +        };
+    +        result.push_back(info);
+    +    }
+    +    result
+    +}
+    
