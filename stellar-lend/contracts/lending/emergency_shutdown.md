@@ -26,12 +26,15 @@ This document describes the contracts-only emergency lifecycle implemented in th
 
 - `Normal`:
   - All operations follow existing granular pause rules.
+  - **Liquidation Policy**: See pause.md for detailed liquidation-pause matrix.
 - `Shutdown`:
   - Block: `deposit`, `deposit_collateral`, `borrow`, `liquidate`, `flash_loan`, `repay`, `withdraw`.
   - Allow: view/read methods and admin recovery actions.
+  - **Liquidation Policy**: **BLOCKED** - Emergency stop prevents cascading failures.
 - `Recovery`:
   - Allow: `repay`, `withdraw` (subject to granular pause and collateral checks).
   - Block: `deposit`, `deposit_collateral`, `borrow`, `liquidate`, `flash_loan`.
+  - **Liquidation Policy**: **BLOCKED** - Unwind-only mode for safe position closure.
 
 ## Security Notes
 
@@ -42,34 +45,35 @@ This document describes the contracts-only emergency lifecycle implemented in th
 
 ## Operation Policy Matrix
 
-| Operation | Normal | Shutdown | Recovery | Notes |
-|-----------|--------|----------|----------|-------|
-| `deposit` | ✅* | ❌ | ❌ | Subject to granular pause rules |
-| `deposit_collateral` | ✅* | ❌ | ❌ | Subject to granular pause rules |
-| `borrow` | ✅* | ❌ | ❌ | Subject to granular pause rules |
-| `repay` | ✅* | ❌ | ✅* | Subject to granular pause rules |
-| `withdraw` | ✅* | ❌ | ✅* | Subject to granular pause rules |
-| `liquidate` | ✅* | ❌ | ❌ | Subject to granular pause rules |
-| `flash_loan` | ✅* | ❌ | ❌ | Subject to granular pause rules |
-| View methods | ✅ | ✅ | ✅ | Always available |
-| Admin recovery actions | ✅ | ✅ | ✅ | Admin only |
+| Operation              | Normal | Shutdown | Recovery | Notes                           |
+| ---------------------- | ------ | -------- | -------- | ------------------------------- |
+| `deposit`              | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
+| `deposit_collateral`   | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
+| `borrow`               | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
+| `repay`                | ✅\*   | ❌       | ✅\*     | Subject to granular pause rules |
+| `withdraw`             | ✅\*   | ❌       | ✅\*     | Subject to granular pause rules |
+| `liquidate`            | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
+| `flash_loan`           | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
+| View methods           | ✅     | ✅       | ✅       | Always available                |
+| Admin recovery actions | ✅     | ✅       | ✅       | Admin only                      |
 
-*Subject to granular pause controls
+\*Subject to granular pause controls
 
 ## State Transition Authorization Matrix
 
-| Transition | Authorized Roles | Preconditions |
-|------------|------------------|---------------|
-| Normal → Shutdown | Admin, Guardian | None |
-| Shutdown → Recovery | Admin only | Must be in Shutdown |
-| Recovery → Normal | Admin only | Must be in Recovery |
-| Normal → Recovery | None | Forbidden |
-| Shutdown → Normal | None | Forbidden |
-| Recovery → Shutdown | Admin, Guardian | Emergency override |
+| Transition          | Authorized Roles | Preconditions       |
+| ------------------- | ---------------- | ------------------- |
+| Normal → Shutdown   | Admin, Guardian  | None                |
+| Shutdown → Recovery | Admin only       | Must be in Shutdown |
+| Recovery → Normal   | Admin only       | Must be in Recovery |
+| Normal → Recovery   | None             | Forbidden           |
+| Shutdown → Normal   | None             | Forbidden           |
+| Recovery → Shutdown | Admin, Guardian  | Emergency override  |
 
 ## Test Coverage
 
 `src/emergency_shutdown_test.rs` covers basic emergency functionality:
+
 - Authorization validation for shutdown triggers
 - State transition flow testing
 - Operation blocking in emergency states
@@ -77,6 +81,7 @@ This document describes the contracts-only emergency lifecycle implemented in th
 - Edge cases and partial pause interactions
 
 `src/emergency_lifecycle_conformance_test.rs` provides comprehensive conformance validation:
+
 - Complete state machine flow (Normal → Shutdown → Recovery → Normal)
 - Authorization matrix enforcement (admin vs guardian roles)
 - Operation permission validation per state

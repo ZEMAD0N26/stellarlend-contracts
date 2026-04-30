@@ -30,6 +30,79 @@ situations or maintenance windows.
 | `Liquidation` | Prevents liquidations.                                              |
 | `ReadOnly`    | Master switch that blocks ALL state changes (user and most admin).  |
 
+## Liquidation-Pause Policy
+
+The protocol follows an explicit liquidation policy that balances **solvency protection** with **market health** during different pause and emergency states.
+
+### Policy Matrix
+
+| State/Emergency                      | Liquidation Paused | Liquidation Behavior | Rationale                                                                                                                        |
+| ------------------------------------ | ------------------ | -------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Normal** + Liquidation Pause       | **Yes**            | **BLOCKED**          | **Solvency Protection**: Prevents potentially solvent positions from being liquidated during oracle issues or market volatility. |
+| **Normal** + Other Operations Paused | **No**             | **ALLOWED**          | **Market Health**: Allows the market to self-correct unhealthy positions while preventing new risk.                              |
+| **Normal** + Global Pause (`All`)    | **Yes**            | **BLOCKED**          | **Protocol Halt**: All operations including liquidations are stopped.                                                            |
+| **Shutdown**                         | **Yes**            | **BLOCKED**          | **Emergency Stop**: Hard stop for all operations to prevent cascading failures.                                                  |
+| **Recovery**                         | **Yes**            | **BLOCKED**          | **Unwind-Only Mode**: Only repay/withdraw allowed to safely close positions.                                                     |
+| **ReadOnly**                         | **Yes**            | **BLOCKED**          | **Incident Freeze**: All state changes frozen for investigation.                                                                 |
+
+### Trade-offs and Decision Framework
+
+#### When to Pause Liquidations (Solvency Protection)
+
+- **Oracle Issues**: Price feed staleness, manipulation, or extreme volatility
+- **Market Stress**: Flash crashes, extreme volatility events
+- **Technical Issues**: Contract bugs, security vulnerabilities
+- **Regulatory Concerns**: Compliance requirements or legal restrictions
+
+#### When to Allow Liquidations (Market Health)
+
+- **Isolated Asset Issues**: Single asset problems while other markets function
+- **Gradual Market Corrections**: Allow natural liquidation of unhealthy positions
+- **Liquidity Events**: Market-wide liquidity crunches where liquidations provide relief
+- **Risk Management**: Prevent systemic risk buildup from unhealthy positions
+
+### Operational Guidelines
+
+#### Incident Response Scenarios
+
+1. **Oracle Staleness Detected**
+
+   ```
+   Action: Pause Liquidation + Pause Borrow/Deposit
+   Reason: Protect potentially solvent positions from incorrect liquidations
+   Recovery: Fix oracle, then unpause in reverse order
+   ```
+
+2. **Market Volatility Event**
+
+   ```
+   Action: Pause Borrow/Deposit only (keep liquidations active)
+   Reason: Allow market self-correction while preventing new risk
+   Recovery: Monitor volatility, gradually unpause when stable
+   ```
+
+3. **Security Vulnerability**
+
+   ```
+   Action: Global Pause or ReadOnly Mode
+   Reason: Complete halt while investigating
+   Recovery: Patch vulnerability, test, then controlled unpause
+   ```
+
+4. **Liquidity Crisis**
+   ```
+   Action: Keep liquidations active, pause new borrowing
+   Reason: Liquidations provide much-needed liquidity
+   Recovery: Monitor system health, adjust as needed
+   ```
+
+### Security Considerations
+
+- **Precedence Rules**: Emergency states and ReadOnly mode override granular pause flags
+- **Atomic Operations**: Pause checks happen before any state changes
+- **Event Transparency**: All pause changes emit events for off-chain monitoring
+- **Role Separation**: Only admin can set granular pauses; guardian can trigger emergency shutdown
+
 ## Contract Interface
 
 ### Admin Functions
@@ -120,12 +193,12 @@ Returns `true` if the protocol is currently in read-only mode. No authorization 
 
 Returns the current emergency lifecycle state:
 
-| Value      | Meaning                                                               |
-| ---------- | --------------------------------------------------------------------- |
-| `Normal`   | Standard operation — all flags are honoured normally.                 |
-| `Shutdown` | Hard stop — all high-risk operations blocked.                         |
+| Value      | Meaning                                                                 |
+| ---------- | ----------------------------------------------------------------------- |
+| `Normal`   | Standard operation — all flags are honoured normally.                   |
+| `Shutdown` | Hard stop — all high-risk operations blocked.                           |
 | `Recovery` | Controlled unwind — `repay` and `withdraw` allowed; all others blocked. |
-| `ReadOnly` | Incident Response — ALL state changes blocked; view functions only.    |
+| `ReadOnly` | Incident Response — ALL state changes blocked; view functions only.     |
 
 Note: `ReadOnly` is a separate flag and can be toggled in any state (`Normal`, `Shutdown`, `Recovery`).
 
@@ -135,12 +208,12 @@ When multiple pause flags or emergency states are active, the protocol follows a
 precedence order to determine if an operation is allowed. The **Global** flag and **ReadOnly**
 mode act as master overrides.
 
-| Global Pause (`All`) | Granular Pause (e.g. `Borrow`) | Result for Operation | Rationale                                      |
-| -------------------- | ------------------------------ | -------------------- | ---------------------------------------------- |
-| `False`              | `False`                        | **ALLOWED**          | Standard operating condition.                  |
-| `False`              | `True`                         | **PAUSED**           | Specific risk mitigated via granular switch.    |
-| `True`               | `False`                        | **PAUSED**           | Global halt supersedes granular unpause.       |
-| `True`               | `True`                         | **PAUSED**           | Protocol-wide defense in depth.                |
+| Global Pause (`All`) | Granular Pause (e.g. `Borrow`) | Result for Operation | Rationale                                    |
+| -------------------- | ------------------------------ | -------------------- | -------------------------------------------- |
+| `False`              | `False`                        | **ALLOWED**          | Standard operating condition.                |
+| `False`              | `True`                         | **PAUSED**           | Specific risk mitigated via granular switch. |
+| `True`               | `False`                        | **PAUSED**           | Global halt supersedes granular unpause.     |
+| `True`               | `True`                         | **PAUSED**           | Protocol-wide defense in depth.              |
 
 ### Emergency State Precedence
 
@@ -171,11 +244,11 @@ fully unwind positions. All other entry points remain blocked.
 
 ## Events
 
-| Event                  | Topic                   | Emitted by                                              |
-| ---------------------- | ----------------------- | ------------------------------------------------------- |
-| `PauseEvent`           | `pause_event`           | `set_pause`, `set_deposit_paused`, `set_withdraw_paused` |
-| `GuardianSetEvent`     | `guardian_set_event`    | `set_guardian`                                          |
-| `EmergencyStateEvent`  | `emergency_state_event` | `emergency_shutdown`, `start_recovery`, `complete_recovery` |
+| Event                 | Topic                   | Emitted by                                                  |
+| --------------------- | ----------------------- | ----------------------------------------------------------- |
+| `PauseEvent`          | `pause_event`           | `set_pause`, `set_deposit_paused`, `set_withdraw_paused`    |
+| `GuardianSetEvent`    | `guardian_set_event`    | `set_guardian`                                              |
+| `EmergencyStateEvent` | `emergency_state_event` | `emergency_shutdown`, `start_recovery`, `complete_recovery` |
 
 ## Security Assumptions
 
@@ -205,7 +278,7 @@ fully unwind positions. All other entry points remain blocked.
    available. Even in recovery, granular pause flags for `Repay` and `Withdraw` are still
    respected — the admin retains fine-grained control.
 
-7. **Reentrancy**: Flash loan operations carry a dedicated reentrancy guard (separate from the
+8. **Reentrancy**: Flash loan operations carry a dedicated reentrancy guard (separate from the
    pause mechanism). The pause check is performed before the guard is engaged.
 
 ## Usage Examples (Rust SDK)
@@ -243,7 +316,7 @@ protocol behavior:
    even if other granular flags are later toggled by mistake.
 
 2. **Deterministic Unpause**: To resume service, granular flags should be reviewed and set to
-   `False` *before* disabling the global `All` flag. This prevents an "accidental unpause" of a
+   `False` _before_ disabling the global `All` flag. This prevents an "accidental unpause" of a
    specific vulnerable path.
 
 3. **Recovery Sequence**: Transitioning to `Recovery` mode is a one-way path to protocol unwind.

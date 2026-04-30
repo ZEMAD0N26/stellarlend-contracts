@@ -124,6 +124,8 @@ mod flash_loan_test;
 #[cfg(test)]
 mod pause_matrix_test;
 #[cfg(test)]
+mod liquidation_pause_policy_test;
+#[cfg(test)]
 mod read_only_test;
 #[cfg(test)]
 mod token_receiver_test;
