@@ -168,6 +168,8 @@ mod upgrade_test;
 mod zero_amount_semantics_test;
 #[cfg(test)]
 mod guardian_scope_test;
+#[cfg(test)]
+mod deterministic_multi_collateral_valuation_test;
 
 #[contract]
 pub struct LendingContract;
