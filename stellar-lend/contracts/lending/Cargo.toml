@@ -11,11 +11,8 @@ path = "src/lib.rs"
 
 [dependencies]
 soroban-sdk = { workspace = true }
-soroban-token-sdk = { workspace = true }
-stellarlend-common = { path = "../common" }
 
 [dev-dependencies]
-stellarlend-common = { path = "../common", features = ["testutils"] }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [features]

@@ -1,18 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-  "client",
-  "contracts/amm",
-  "contracts/bridge",
-  "contracts/common",
   "contracts/hello-world",
   "contracts/lending",
-  "contracts/timelock",
-  "contracts/vesting",
-]
-exclude = [
-  "contracts/hello-world",
-  "indexing_system"
 ]
 
 [workspace.dependencies]
