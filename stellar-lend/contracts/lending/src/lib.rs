@@ -1,11 +1,35 @@
 #![no_std]
 
+mod debt;
 pub mod rounding_strategy;
 
 #[cfg(test)]
 mod interest_drift_regression_test;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+use debt::{
+    borrow_amount, effective_debt, load_debt, repay_amount, save_debt, DebtPosition,
+    DEFAULT_APR_BPS,
+};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, IntoVal, Symbol,
+};
+
+/// Canonical storage namespace for this contract.
+///
+/// Using a single typed enum prevents silent collisions between ad-hoc string
+/// keys and tuple layouts as the contract grows.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Admin,
+    BorrowMinAmount,
+    FlashActive,
+    FlashFeeBps,
+    Collateral(Address),
+    Debt(Address),
+    Balance(Address, Address),
+    Treasury(Address),
+}
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -27,37 +51,43 @@ pub struct LendingContract;
 #[contractimpl]
 impl LendingContract {
     pub fn initialize(env: Env, admin: Address) {
-        env.storage().instance().set(&"admin", &admin);
+        env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
     pub fn get_admin(env: Env) -> Address {
-        env.storage().instance().get(&"admin").unwrap()
+        env.storage().instance().get(&DataKey::Admin).unwrap()
     }
 
     /// Set the minimum borrow amount (admin-only).
     pub fn set_min_borrow(env: Env, min_borrow: i128) {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
-        env.storage().instance().set(&Symbol::new(&env, "BorrowMinAmount"), &min_borrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::BorrowMinAmount, &min_borrow);
     }
 
     /// Get the minimum borrow amount.
     pub fn get_min_borrow(env: Env) -> i128 {
         env.storage()
             .instance()
-            .get(&Symbol::new(&env, "BorrowMinAmount"))
+            .get(&DataKey::BorrowMinAmount)
             .unwrap_or(0)
     }
 
     /// Deposit collateral for a user.
     pub fn deposit(env: Env, user: Address, amount: i128) -> i128 {
         // Prevent mutating during an active flash loan callback
-        let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
+        let active: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::FlashActive)
+            .unwrap_or(false);
         if active {
             panic!("FlashLoanReentrancy");
         }
         user.require_auth();
-        let key = ("col", user.clone());
+        let key = DataKey::Collateral(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_balance = current + amount;
         env.storage().persistent().set(&key, &new_balance);
@@ -66,12 +96,16 @@ impl LendingContract {
 
     pub fn withdraw(env: Env, user: Address, amount: i128) -> i128 {
         // Prevent mutating during an active flash loan callback
-        let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
+        let active: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::FlashActive)
+            .unwrap_or(false);
         if active {
             panic!("FlashLoanReentrancy");
         }
         user.require_auth();
-        let key = ("col", user.clone());
+        let key = DataKey::Collateral(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_balance = current - amount;
         env.storage().persistent().set(&key, &new_balance);
@@ -85,16 +119,21 @@ impl LendingContract {
         if amount < min_borrow {
             return Err(LendingError::BelowMinimumBorrow);
         }
-        let key = ("debt", user.clone());
-        let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
-        let new_debt = current + amount;
-        env.storage().persistent().set(&key, &new_debt);
-        Ok(new_debt)
+        let now = env.ledger().timestamp();
+        let position = load_debt(&env, &user);
+        let updated = borrow_amount(position, now, amount, DEFAULT_APR_BPS)
+            .unwrap_or_else(|_| panic_with_debt_error());
+        save_debt(&env, &user, &updated);
+        Ok(updated.principal)
     }
 
     pub fn repay(env: Env, user: Address, amount: i128) -> i128 {
         // Prevent mutating during an active flash loan callback
-        let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
+        let active: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::FlashActive)
+            .unwrap_or(false);
         if active {
             panic!("FlashLoanReentrancy");
         }
@@ -114,7 +153,7 @@ impl LendingContract {
     // Flash loan fee setter (bps). Only admin may call.
     pub fn set_flash_loan_fee_bps(env: Env, admin: Address, fee_bps: i128) {
         admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&"admin").unwrap();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if stored_admin != admin {
             panic!("Unauthorized");
         }
@@ -122,42 +161,47 @@ impl LendingContract {
         if fee_bps < 0 || fee_bps > MAX_FEE {
             panic!("InvalidFeeBps");
         }
-        env.storage().instance().set(&"flash_fee_bps", &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::FlashFeeBps, &fee_bps);
     }
 
     fn get_flash_fee_bps(env: &Env) -> i128 {
-        env.storage().instance().get(&"flash_fee_bps").unwrap_or(5)
+        env.storage()
+            .instance()
+            .get(&DataKey::FlashFeeBps)
+            .unwrap_or(5)
     }
 
     // Repay function used by receiver during callback to return funds to the contract.
     pub fn repay_flash_loan(env: Env, asset: Address, amount: i128) {
         // Payer must be the invoker (caller contract/account)
-        let payer = env.invoker();
+        // Soroban SDK v25 exposes the current contract address here, not the
+        // external invoker identity.
+        let payer = env.current_contract_address();
         payer.require_auth();
         // subtract from payer balance
-        let payer_key = ("bal", asset.clone(), payer.clone());
+        let payer_key = DataKey::Balance(asset.clone(), payer.clone());
         let payer_bal: i128 = env.storage().persistent().get(&payer_key).unwrap_or(0);
         if payer_bal < amount {
             panic!("InsufficientBalance");
         }
-        env.storage().persistent().set(&payer_key, &(payer_bal - amount));
+        env.storage()
+            .persistent()
+            .set(&payer_key, &(payer_bal - amount));
         // add to contract treasury
-        let tre_key = ("treasury", asset.clone());
+        let tre_key = DataKey::Treasury(asset.clone());
         let tre_bal: i128 = env.storage().persistent().get(&tre_key).unwrap_or(0);
-        env.storage().persistent().set(&tre_key, &(tre_bal + amount));
+        env.storage()
+            .persistent()
+            .set(&tre_key, &(tre_bal + amount));
     }
 
     /// Execute a flash loan: transfer assets to `receiver`, call its `on_flash_loan` callback,
     /// and ensure repayment of principal + fee before returning.
-    pub fn flash_loan(
-        env: Env,
-        receiver: Address,
-        asset: Address,
-        amount: i128,
-        params: Bytes,
-    ) {
+    pub fn flash_loan(env: Env, receiver: Address, asset: Address, amount: i128, params: Bytes) {
         // Check liquidity
-        let tre_key = ("treasury", asset.clone());
+        let tre_key = DataKey::Treasury(asset.clone());
         let tre_bal: i128 = env.storage().persistent().get(&tre_key).unwrap_or(0);
         if amount > tre_bal {
             panic!("InsufficientLiquidity");
@@ -171,23 +215,31 @@ impl LendingContract {
         let fee = amount * fee_bps / 10_000;
 
         // transfer out: treasury -= amount; receiver balance += amount
-        env.storage().persistent().set(&tre_key, &(tre_bal - amount));
-        let rec_key = ("bal", asset.clone(), receiver.clone());
+        env.storage()
+            .persistent()
+            .set(&tre_key, &(tre_bal - amount));
+        let rec_key = DataKey::Balance(asset.clone(), receiver.clone());
         let rec_bal: i128 = env.storage().persistent().get(&rec_key).unwrap_or(0);
-        env.storage().persistent().set(&rec_key, &(rec_bal + amount));
+        env.storage()
+            .persistent()
+            .set(&rec_key, &(rec_bal + amount));
 
         // set reentrancy guard
-        env.storage().instance().set(&"flash_active", &true);
+        env.storage().instance().set(&DataKey::FlashActive, &true);
 
         // invoke receiver callback: on_flash_loan(initiator, asset, amount, fee, params)
         let method = Symbol::new(&env, "on_flash_loan");
         // Prepare arguments: initiator = caller (invoker)
-        let initiator = env.invoker();
+        let initiator = env.current_contract_address();
         // Call contract - if it panics, propagate
-        env.invoke_contract(&receiver, &method, (initiator.clone(), asset.clone(), amount, fee, params));
+        env.invoke_contract::<()>(
+            &receiver,
+            &method,
+            (initiator.clone(), asset.clone(), amount, fee, params).into_val(&env),
+        );
 
         // clear reentrancy guard before checks to ensure state is readable
-        env.storage().instance().set(&"flash_active", &false);
+        env.storage().instance().set(&DataKey::FlashActive, &false);
 
         // verify repayment: treasury balance must be >= previous tre_bal + fee
         let final_tre: i128 = env.storage().persistent().get(&tre_key).unwrap_or(0);
@@ -201,7 +253,7 @@ impl LendingContract {
         let col: i128 = env
             .storage()
             .persistent()
-            .get(&("col", user.clone()))
+            .get(&DataKey::Collateral(user.clone()))
             .unwrap_or(0);
         let position = load_debt(&env, &user);
         let debt = effective_debt(&position, env.ledger().timestamp(), DEFAULT_APR_BPS)
@@ -314,12 +366,64 @@ mod test {
 
     #[test]
     fn test_set_min_borrow_admin_only() {
-        let (_env, client, admin, _user) = setup();
+        let (_env, client, _admin, _user) = setup();
         assert_eq!(client.get_min_borrow(), 0);
         client.set_min_borrow(&100);
         assert_eq!(client.get_min_borrow(), 100);
     }
-}
 
-#[cfg(test)]
-mod interest_drift_regression_test;
+    #[test]
+    fn test_typed_storage_keys_keep_namespaces_isolated() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(LendingContract, ());
+        let user = Address::generate(&env);
+        let asset = Address::generate(&env);
+
+        env.as_contract(&id, || {
+            env.storage().instance().set(&DataKey::Admin, &user);
+            env.storage().instance().set(&DataKey::FlashFeeBps, &7i128);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Collateral(user.clone()), &25i128);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Debt(user.clone()), &40i128);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Balance(asset.clone(), user.clone()), &55i128);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Treasury(asset.clone()), &70i128);
+
+            assert_eq!(
+                env.storage().instance().get(&DataKey::Admin),
+                Some(user.clone())
+            );
+            assert_eq!(
+                env.storage().instance().get(&DataKey::FlashFeeBps),
+                Some(7i128)
+            );
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::Collateral(user.clone())),
+                Some(25i128)
+            );
+            assert_eq!(
+                env.storage().persistent().get(&DataKey::Debt(user.clone())),
+                Some(40i128)
+            );
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::Balance(asset.clone(), user.clone())),
+                Some(55i128)
+            );
+            assert_eq!(
+                env.storage().persistent().get(&DataKey::Treasury(asset)),
+                Some(70i128)
+            );
+        });
+    }
+}

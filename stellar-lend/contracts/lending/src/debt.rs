@@ -1,8 +1,7 @@
 use soroban_sdk::{contracttype, Address, Env};
 
-use crate::rounding_strategy::{
-    calculate_interest_with_rounding, RoundingError, RoundingMode,
-};
+use crate::rounding_strategy::{calculate_interest_with_rounding, RoundingMode};
+use crate::DataKey;
 
 pub const DEFAULT_APR_BPS: i128 = 500;
 
@@ -19,14 +18,14 @@ pub enum DebtError {
     InvalidAmount,
 }
 
-impl From<RoundingError> for DebtError {
-    fn from(_: RoundingError) -> Self {
+impl From<&'static str> for DebtError {
+    fn from(_: &'static str) -> Self {
         DebtError::Overflow
     }
 }
 
 pub fn load_debt(env: &Env, user: &Address) -> DebtPosition {
-    let key = ("debt", user.clone());
+    let key = DataKey::Debt(user.clone());
     env.storage()
         .persistent()
         .get(&key)
@@ -37,7 +36,7 @@ pub fn load_debt(env: &Env, user: &Address) -> DebtPosition {
 }
 
 pub fn save_debt(env: &Env, user: &Address, position: &DebtPosition) {
-    let key = ("debt", user.clone());
+    let key = DataKey::Debt(user.clone());
     env.storage().persistent().set(&key, position);
 }
 
@@ -45,21 +44,13 @@ pub fn elapsed_seconds(now: u64, last_update: u64) -> u64 {
     now.saturating_sub(last_update)
 }
 
-pub fn accrue_interest(
-    principal: i128,
-    elapsed: u64,
-    rate_bps: i128,
-) -> Result<i128, DebtError> {
+pub fn accrue_interest(principal: i128, elapsed: u64, rate_bps: i128) -> Result<i128, DebtError> {
     if principal == 0 || elapsed == 0 {
         return Ok(0);
     }
 
-    let result = calculate_interest_with_rounding(
-        principal,
-        elapsed,
-        rate_bps,
-        RoundingMode::Bankers,
-    )?;
+    let result =
+        calculate_interest_with_rounding(principal, elapsed, rate_bps, RoundingMode::Bankers)?;
 
     if result.interest < 0 {
         return Err(DebtError::Overflow);

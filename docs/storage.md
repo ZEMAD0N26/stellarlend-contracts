@@ -12,7 +12,27 @@ All keys are defined using `contracttype` enums.
 
 ## Storage Map
 
-### 1. Cross-Asset Core (`cross_asset.rs`)
+### 1. Lending Contract (`stellar-lend/contracts/lending/src/lib.rs`)
+
+The lending contract centralizes its storage namespace in a single
+`#[contracttype] enum DataKey`. This is the canonical key list for that module.
+
+| Key (`DataKey`) | Storage Class | Value Type | Description |
+|-----------------|---------------|------------|-------------|
+| `Admin` | `instance()` | `Address` | Contract admin authorized to update admin-controlled settings. |
+| `BorrowMinAmount` | `instance()` | `i128` | Minimum borrow amount enforced by `borrow`. |
+| `FlashActive` | `instance()` | `bool` | Reentrancy guard set during flash-loan callbacks. |
+| `FlashFeeBps` | `instance()` | `i128` | Flash-loan fee in basis points. |
+| `Collateral(Address)` | `persistent()` | `i128` | Per-user collateral balance. |
+| `Debt(Address)` | `persistent()` | `DebtPosition` | Per-user debt principal and last accrual timestamp. |
+| `Balance(Address, Address)` | `persistent()` | `i128` | Per-asset balance tracked for a specific user or callback invoker. |
+| `Treasury(Address)` | `persistent()` | `i128` | Per-asset treasury liquidity available for flash loans. |
+
+Notes:
+- `Address` payload order for `Balance(asset, user)` is asset first, user second.
+- New lending keys must be appended to `DataKey`; never reuse an existing variant for a different value type.
+
+### 2. Cross-Asset Core (`cross_asset.rs`)
 
 | Key (Symbol/Type) | Value Type | Description |
 |-------------------|------------|-------------|
@@ -23,7 +43,7 @@ All keys are defined using `contracttype` enums.
 | `borrows` | `Map<AssetKey, i128>` | Total borrows (debt) for each asset. |
 | `assets` | `Vec<AssetKey>` | List of all registered assets in the protocol. |
 
-### 2. Risk Management (`risk_management.rs`)
+### 3. Risk Management (`risk_management.rs`)
 
 | Key (`RiskDataKey`) | Value Type | Description |
 |---------------------|------------|-------------|
@@ -31,7 +51,7 @@ All keys are defined using `contracttype` enums.
 | `Admin` | `Address` | Admin address for risk management operations. |
 | `EmergencyPause` | `bool` | Global flag to halt all protocol operations. |
 
-### 3. Deposit Module (`deposit.rs`)
+### 4. Deposit Module (`deposit.rs`)
 
 | Key (`DepositDataKey`) | Value Type | Description |
 |------------------------|------------|-------------|
@@ -41,14 +61,14 @@ All keys are defined using `contracttype` enums.
 | `ProtocolAnalytics` | `ProtocolAnalytics` | Aggregate protocol metrics (deposits, borrows, TVL). |
 | `UserAnalytics(Address)` | `UserAnalytics` | Detailed per-user activity and risk metrics. |
 
-### 4. Interest Rate Module (`interest_rate.rs`)
+### 5. Interest Rate Module (`interest_rate.rs`)
 
 | Key (`InterestRateDataKey`) | Value Type | Description |
 |-----------------------------|------------|-------------|
 | `InterestRateConfig` | `InterestRateConfig` | Kink-based model parameters (base rate, kink, multipliers). |
 | `Admin` | `Address` | Admin address for interest rate adjustments. |
 
-### 5. Oracle Module (`oracle.rs`)
+### 6. Oracle Module (`oracle.rs`)
 
 | Key (`OracleDataKey`) | Value Type | Description |
 |-----------------------|------------|-------------|
@@ -57,14 +77,14 @@ All keys are defined using `contracttype` enums.
 | `PriceCache(Address)` | `CachedPrice` | TTL-bounded price cache for gas efficiency. |
 | `OracleConfig` | `OracleConfig` | Global oracle safety parameters (deviation, staleness). |
 
-### 6. Flash Loan Module (`flash_loan.rs`)
+### 7. Flash Loan Module (`flash_loan.rs`)
 
 | Key (`FlashLoanDataKey`) | Value Type | Description |
 |--------------------------|------------|-------------|
 | `FlashLoanConfig` | `FlashLoanConfig` | Fee basis points and amount limits. |
 | `ActiveFlashLoan(Addr, Addr)` | `FlashLoanRecord` | Reentrancy guard and transient loan record. |
 
-### 7. Analytics Module (`analytics.rs`)
+### 8. Analytics Module (`analytics.rs`)
 
 | Key (`AnalyticsDataKey`) | Value Type | Description |
 |--------------------------|------------|-------------|
