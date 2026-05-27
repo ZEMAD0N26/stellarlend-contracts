@@ -7,13 +7,13 @@
 pub enum RoundingMode {
     /// Round towards zero (truncate) - original buggy behavior
     Truncate,
-    
+
     /// Round down (floor) - favors protocol
     Floor,
-    
+
     /// Banker's rounding (round to nearest even) - reduces bias
     Bankers,
-    
+
     /// Round up (ceil) - favors users (safer)
     Ceil,
 }
@@ -36,13 +36,13 @@ pub enum RoundingError {
 pub struct InterestCalcResult {
     /// Final rounded interest amount
     pub interest: i128,
-    
+
     /// Fractional part (remainder) that was lost
     pub remainder: i128,
-    
+
     /// Total precision loss so far (for tracking drift)
     pub total_drift: i128,
-    
+
     /// Rounding mode applied
     pub mode: RoundingMode,
 }
@@ -63,7 +63,7 @@ impl InterestCalcResult {
 ///
 /// # Formula (with precision protection)
 /// ```
-/// interest = (borrowed_amount * elapsed_seconds * rate_bps * PRECISION) 
+/// interest = (borrowed_amount * elapsed_seconds * rate_bps * PRECISION)
 ///            / (SECONDS_PER_YEAR * BASIS_POINTS_SCALE)
 /// ```
 ///
@@ -113,18 +113,18 @@ pub fn calculate_interest_with_rounding(
     let remainder = with_precision % denominator;
 
     // Step 5: Apply rounding strategy
-    let (rounded_interest, _actual_remainder) = apply_rounding(
-        full_division,
-        remainder,
-        denominator,
-        mode,
-    );
+    let (rounded_interest, _actual_remainder) =
+        apply_rounding(full_division, remainder, denominator, mode);
 
     // Step 6: Back-convert from precision scale
     let final_interest = rounded_interest / INTEREST_PRECISION;
     let final_remainder = rounded_interest % INTEREST_PRECISION;
 
-    Ok(InterestCalcResult::new(final_interest, final_remainder, mode))
+    Ok(InterestCalcResult::new(
+        final_interest,
+        final_remainder,
+        mode,
+    ))
 }
 
 /// Apply rounding strategy to preserve precision
@@ -194,7 +194,10 @@ pub fn reconcile_debt_with_drift_correction(
     }
 
     // Return reconciled debt and updated drift
-    Ok((freshly_calculated_debt, accumulated_drift + (freshly_calculated_debt - stored_debt)))
+    Ok((
+        freshly_calculated_debt,
+        accumulated_drift + (freshly_calculated_debt - stored_debt),
+    ))
 }
 
 #[cfg(test)]
@@ -203,7 +206,8 @@ mod tests {
 
     #[test]
     fn test_zero_borrowed_returns_zero_interest() {
-        let result = calculate_interest_with_rounding(0, 365 * 24 * 60 * 60, 500, RoundingMode::Floor);
+        let result =
+            calculate_interest_with_rounding(0, 365 * 24 * 60 * 60, 500, RoundingMode::Floor);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().interest, 0);
     }
@@ -216,7 +220,8 @@ mod tests {
             SECONDS_PER_YEAR,
             500, // 5%
             RoundingMode::Floor,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Expected: 100 * 0.05 = 5
         assert_eq!(result.interest, 5);
@@ -228,16 +233,14 @@ mod tests {
         let result_floor = calculate_interest_with_rounding(
             1000,
             SECONDS_PER_YEAR / 12, // 1 month
-            500, // 5% APR
+            500,                   // 5% APR
             RoundingMode::Floor,
-        ).unwrap();
+        )
+        .unwrap();
 
-        let result_ceil = calculate_interest_with_rounding(
-            1000,
-            SECONDS_PER_YEAR / 12,
-            500,
-            RoundingMode::Ceil,
-        ).unwrap();
+        let result_ceil =
+            calculate_interest_with_rounding(1000, SECONDS_PER_YEAR / 12, 500, RoundingMode::Ceil)
+                .unwrap();
 
         // Ceil should round up from floor
         assert!(result_ceil.interest >= result_floor.interest);
@@ -256,13 +259,18 @@ mod tests {
                 monthly_seconds,
                 500, // 5% APR
                 RoundingMode::Bankers,
-            ).unwrap();
+            )
+            .unwrap();
 
             total_interest += result.interest;
         }
 
         // 24 * (1000 * 0.05 / 12) ≈ 100
         // Should be close to 100 with bankers rounding
-        assert!(total_interest >= 95 && total_interest <= 105, "total_interest: {}", total_interest);
+        assert!(
+            total_interest >= 95 && total_interest <= 105,
+            "total_interest: {}",
+            total_interest
+        );
     }
 }

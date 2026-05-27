@@ -1,8 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env};
 
-use crate::rounding_strategy::{
-    calculate_interest_with_rounding, RoundingError, RoundingMode,
-};
+use crate::rounding_strategy::{calculate_interest_with_rounding, RoundingError, RoundingMode};
 
 pub const DEFAULT_APR_BPS: i128 = 500;
 
@@ -45,21 +43,13 @@ pub fn elapsed_seconds(now: u64, last_update: u64) -> u64 {
     now.saturating_sub(last_update)
 }
 
-pub fn accrue_interest(
-    principal: i128,
-    elapsed: u64,
-    rate_bps: i128,
-) -> Result<i128, DebtError> {
+pub fn accrue_interest(principal: i128, elapsed: u64, rate_bps: i128) -> Result<i128, DebtError> {
     if principal == 0 || elapsed == 0 {
         return Ok(0);
     }
 
-    let result = calculate_interest_with_rounding(
-        principal,
-        elapsed,
-        rate_bps,
-        RoundingMode::Bankers,
-    )?;
+    let result =
+        calculate_interest_with_rounding(principal, elapsed, rate_bps, RoundingMode::Bankers)?;
 
     if result.interest < 0 {
         return Err(DebtError::Overflow);

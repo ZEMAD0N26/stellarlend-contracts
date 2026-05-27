@@ -26,7 +26,6 @@ mod interest_drift_regression_tests {
             .expect("should not overflow");
 
             total_interest += result.interest;
-
         }
 
         // Expected: 100,000 * 0.05 = 5,000 (exact)
@@ -34,13 +33,8 @@ mod interest_drift_regression_tests {
         let expected = 5_000i128;
         let drift = (total_interest - expected).abs();
 
-
         // Banker's rounding should keep drift under 5 units for this scenario
-        assert!(
-            drift <= 5,
-            "Drift too large: {} (expected <= 5)",
-            drift
-        );
+        assert!(drift <= 5, "Drift too large: {} (expected <= 5)", drift);
     }
 
     /// ✅ Test: 100-month (8+ year) accrual with drift tracking
@@ -62,14 +56,12 @@ mod interest_drift_regression_tests {
 
             total_interest += result.interest;
             _total_drift += result.remainder;
-
         }
 
         // 100 months ≈ 8.33 years
         // 50,000 * 0.05 * 8.33 = 20,825
         let expected_approx = 20_825i128;
         let drift = (total_interest - expected_approx).abs();
-
 
         // Even over 100 months, drift should be bounded
         assert!(
@@ -121,9 +113,8 @@ mod interest_drift_regression_tests {
             let mut total = 0i128;
 
             for _ in 0..12 {
-                let result =
-                    calculate_interest_with_rounding(borrowed, one_month, 500, mode)
-                        .expect("should not overflow");
+                let result = calculate_interest_with_rounding(borrowed, one_month, 500, mode)
+                    .expect("should not overflow");
                 total += result.interest;
             }
 
@@ -146,22 +137,26 @@ mod interest_drift_regression_tests {
         let accumulated_drift = 2i128;
         let max_allowed_drift_bps = 100; // 1% = 100 basis points
 
-        let _result = reconcile_debt_with_drift_correction(stored, fresh, accumulated_drift, max_allowed_drift_bps);
+        let result = reconcile_debt_with_drift_correction(
+            stored,
+            fresh,
+            accumulated_drift,
+            max_allowed_drift_bps,
+        );
 
-        // Should reconcile successfully (5 on 100 = 500 bps drift... this should error)
-        // Let me use a smaller drift
+        // Should pass with acceptable drift
+        assert!(
+            result.is_ok(),
+            "Reconciliation should succeed within tolerance"
+        );
     }
 
     /// ✅ Test: Overflow handling on extreme horizons
     #[test]
     fn test_extreme_horizon_overflow_protection() {
         // i128::MAX seconds ≈ 9.2 * 10^18 seconds ≈ 292 billion years
-        let result = calculate_interest_with_rounding(
-            i128::MAX / 2,
-            u64::MAX,
-            500,
-            RoundingMode::Bankers,
-        );
+        let result =
+            calculate_interest_with_rounding(i128::MAX / 2, u64::MAX, 500, RoundingMode::Bankers);
 
         // Should error gracefully, not panic
         assert!(result.is_err(), "Should detect overflow at extreme horizon");

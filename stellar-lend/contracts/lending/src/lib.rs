@@ -1,13 +1,15 @@
 #![no_std]
 
-pub mod rounding_strategy;
 pub mod debt;
+pub mod rounding_strategy;
 
 #[cfg(test)]
 mod interest_drift_regression_test;
 
 use crate::debt::*;
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Bytes, Env, IntoVal, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, IntoVal, Symbol,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -49,9 +51,10 @@ impl LendingContract {
     pub fn initialize(env: Env, admin: Address) {
         env.storage().instance().set(&"admin", &admin);
         // initialize emergency state to Normal
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, "EmergencyState"), &EmergencyState::Normal);
+        env.storage().instance().set(
+            &Symbol::new(&env, "EmergencyState"),
+            &EmergencyState::Normal,
+        );
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -62,7 +65,9 @@ impl LendingContract {
     pub fn set_min_borrow(env: Env, min_borrow: i128) {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
-        env.storage().instance().set(&Symbol::new(&env, "BorrowMinAmount"), &min_borrow);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "BorrowMinAmount"), &min_borrow);
     }
 
     /// Get the minimum borrow amount.
@@ -85,7 +90,11 @@ impl LendingContract {
             panic!("DepositNotAllowedInCurrentState");
         }
         // Prevent mutating during an active flash loan callback
-        let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
+        let active: bool = env
+            .storage()
+            .instance()
+            .get(&"flash_active")
+            .unwrap_or(false);
         if active {
             panic!("FlashLoanReentrancy");
         }
@@ -108,7 +117,11 @@ impl LendingContract {
             panic!("WithdrawDisabledDuringShutdown");
         }
         // Prevent mutating during an active flash loan callback
-        let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
+        let active: bool = env
+            .storage()
+            .instance()
+            .get(&"flash_active")
+            .unwrap_or(false);
         if active {
             panic!("FlashLoanReentrancy");
         }
@@ -154,7 +167,11 @@ impl LendingContract {
             panic!("RepayDisabledDuringShutdown");
         }
         // Prevent mutating during an active flash loan callback
-        let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
+        let active: bool = env
+            .storage()
+            .instance()
+            .get(&"flash_active")
+            .unwrap_or(false);
         if active {
             panic!("FlashLoanReentrancy");
         }
@@ -234,11 +251,15 @@ impl LendingContract {
         if payer_bal < amount {
             panic!("InsufficientBalance");
         }
-        env.storage().persistent().set(&payer_key, &(payer_bal - amount));
+        env.storage()
+            .persistent()
+            .set(&payer_key, &(payer_bal - amount));
         // add to contract treasury
         let tre_key = ("treasury", asset.clone());
         let tre_bal: i128 = env.storage().persistent().get(&tre_key).unwrap_or(0);
-        env.storage().persistent().set(&tre_key, &(tre_bal + amount));
+        env.storage()
+            .persistent()
+            .set(&tre_key, &(tre_bal + amount));
     }
 
     /// Execute a flash loan: transfer assets to `receiver`, call its `on_flash_loan` callback,
@@ -266,10 +287,14 @@ impl LendingContract {
         let fee = amount * fee_bps / 10_000;
 
         // transfer out: treasury -= amount; receiver balance += amount
-        env.storage().persistent().set(&tre_key, &(tre_bal - amount));
+        env.storage()
+            .persistent()
+            .set(&tre_key, &(tre_bal - amount));
         let rec_key = ("bal", asset.clone(), receiver.clone());
         let rec_bal: i128 = env.storage().persistent().get(&rec_key).unwrap_or(0);
-        env.storage().persistent().set(&rec_key, &(rec_bal + amount));
+        env.storage()
+            .persistent()
+            .set(&rec_key, &(rec_bal + amount));
 
         // set reentrancy guard
         env.storage().instance().set(&"flash_active", &true);
