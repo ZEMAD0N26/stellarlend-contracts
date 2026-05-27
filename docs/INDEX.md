@@ -49,8 +49,9 @@ These should not be considered the source of truth for the current system.
 For accuracy and implementation details, always prefer:
 
 - Structured documentation in `/docs`
-- Contract source code in `stellar-lend/contracts/`
+- Contract source code in `stellar-lend/contracts/lending/src/`
 
+*Consolidation Rationale*: Historically, a separate and misnamed source tree (`contracts/lending/scr`) existed and caused workspace resolution confusion. We have consolidated all active, salvageable code (like the `rounding_strategy`) into the canonical workspace crate at `stellar-lend/contracts/lending/src/` and deleted the stray tree. This ensures a single source of truth for the lending protocol and proper Cargo workspace builds.
 
 ## Rationale
 

@@ -207,23 +207,20 @@ stellarlend-contracts/
 └── stellar-lend/            # Main contract workspace
     ├── Cargo.toml           # Workspace configuration
     └── contracts/
-        └── hello-world/     # Main StellarLend contract
+        ├── lending/         # Main StellarLend contract (Single Canonical Tree)
+        │   ├── Cargo.toml
+        │   ├── Makefile     # Build/test shortcuts
+        │   ├── README.md    # Contract-specific docs
+        │   └── src/
+        │       ├── lib.rs   # Main contract entry point
+        │       ├── rounding_strategy.rs # Mathematical utilities
+        │       └── interest_drift_regression_test.rs # Regression tests
+        └── hello-world/     # Minimal placeholder contract
             ├── Cargo.toml
-            ├── Makefile     # Build/test shortcuts
-            ├── README.md    # Contract-specific docs
+            ├── Makefile
+            ├── README.md
             └── src/
-                ├── lib.rs   # Main contract entry point
-                ├── deposit.rs
-                ├── borrow.rs
-                ├── repay.rs
-                ├── withdraw.rs
-                ├── liquidate.rs
-                ├── oracle.rs
-                ├── governance.rs
-                ├── amm.rs
-                ├── flash_loan.rs
-                ├── analytics.rs
-                └── test.rs  # Test suite
+                └── lib.rs
 ```
 
 ---
