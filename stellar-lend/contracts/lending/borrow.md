@@ -72,11 +72,12 @@ pub fn borrow(
 - Each borrow checks if new total debt would exceed ceiling
 - Protects protocol from excessive leverage
 
-### Pause Mechanism
+### Minimum Borrow Threshold
 
-- Admin can pause all borrow operations
-- Useful for emergency situations or upgrades
-- Does not affect existing positions, only new borrows
+- **Storage Key**: `BorrowMinAmount` (stored in the contract instance storage)
+- **Error Code**: `LendingError::BelowMinimumBorrow` (`1008`)
+- **Rationale**: Dust-sized loans accrue negligible interest (which rounds to zero under discrete math) and are highly uneconomic to liquidate since gas/transaction fees exceed the loan's value. Enforcing a configurable minimum borrow size protects protocol liquidity, prevents unliquidatable bad debt, and preserves the protocol's economics.
+- **Admin Configuration**: The admin can update the minimum borrow size dynamically at any time using the `set_min_borrow` endpoint.
 
 ## Usage Examples
 

@@ -1,12 +1,19 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PositionSummary {
     pub collateral: i128,
     pub debt: i128,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum LendingError {
+    BelowMinimumBorrow = 1008,
 }
 
 #[contract]
@@ -22,6 +29,21 @@ impl LendingContract {
     /// Get the configured admin (or panic if uninitialized).
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&"admin").unwrap()
+    }
+
+    /// Set the minimum borrow amount (admin-only).
+    pub fn set_min_borrow(env: Env, min_borrow: i128) {
+        let admin = Self::get_admin(env.clone());
+        admin.require_auth();
+        env.storage().instance().set(&Symbol::new(&env, "BorrowMinAmount"), &min_borrow);
+    }
+
+    /// Get the minimum borrow amount.
+    pub fn get_min_borrow(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "BorrowMinAmount"))
+            .unwrap_or(0)
     }
 
     /// Deposit collateral for a user.
@@ -45,13 +67,17 @@ impl LendingContract {
     }
 
     /// Borrow against deposited collateral.
-    pub fn borrow(env: Env, user: Address, amount: i128) -> i128 {
+    pub fn borrow(env: Env, user: Address, amount: i128) -> Result<i128, LendingError> {
         user.require_auth();
+        let min_borrow = Self::get_min_borrow(env.clone());
+        if amount < min_borrow {
+            return Err(LendingError::BelowMinimumBorrow);
+        }
         let key = ("debt", user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_debt = current + amount;
         env.storage().persistent().set(&key, &new_debt);
-        new_debt
+        Ok(new_debt)
     }
 
     /// Repay debt.
@@ -153,5 +179,29 @@ mod test {
         let pos = client.get_position(&user);
         assert_eq!(pos.collateral, 0);
         assert_eq!(pos.debt, 0);
+    }
+
+    #[test]
+    fn test_borrow_below_minimum_rejected() {
+        let (_env, client, _admin, user) = setup();
+        client.set_min_borrow(&50);
+        let res = client.try_borrow(&user, &40);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_borrow_exactly_minimum_accepted() {
+        let (_env, client, _admin, user) = setup();
+        client.set_min_borrow(&50);
+        let res = client.borrow(&user, &50);
+        assert_eq!(res, 50);
+    }
+
+    #[test]
+    fn test_set_min_borrow_admin_only() {
+        let (_env, client, admin, _user) = setup();
+        assert_eq!(client.get_min_borrow(), 0);
+        client.set_min_borrow(&100);
+        assert_eq!(client.get_min_borrow(), 100);
     }
 }
