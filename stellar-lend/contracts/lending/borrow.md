@@ -1,5 +1,32 @@
 # Borrow Function Documentation
 
+## Canonical contract tree
+
+The live Soroban lending crate is `stellar-lend/contracts/lending`. Interest accrual is implemented in `src/rounding_strategy.rs` and `src/debt.rs`, with borrow and repay settling accrual in `src/lib.rs`.
+
+The sibling path `contracts/lending/scr/` (misnamed for `src`) is a legacy reference implementation. New changes belong in `stellar-lend/contracts/lending` only.
+
+## Interest accrual
+
+| Item | Value |
+| --- | --- |
+| Rounding mode | Banker's (round half to even) |
+| Annual rate | 500 basis points (5% APR) |
+| Principal units | Asset smallest units (`i128`) |
+| Rate units | Basis points per year (10_000 = 100%) |
+| Time units | Ledger timestamp seconds (`u64`) |
+| Storage | `DebtPosition { principal, last_update }` per user |
+
+Accrual runs on `borrow` and `repay` before principal changes. `get_position` reports principal plus pending interest without persisting a view-time accrual.
+
+Formula (scaled internally with `INTEREST_PRECISION = 1_000_000`):
+
+```
+interest = principal * elapsed_seconds * rate_bps / (SECONDS_PER_YEAR * 10_000)
+```
+
+`SECONDS_PER_YEAR = 31_536_000`.
+
 ## Overview
 
 The borrow function allows users to borrow assets from the StellarLend protocol by providing collateral. The system enforces minimum collateral ratios, tracks interest accrual, and respects protocol-level constraints such as debt ceilings and pause states.
@@ -56,9 +83,9 @@ pub fn borrow(
 ### Interest Calculation
 
 - **Annual Rate**: 5% (500 basis points)
-- Interest accrues continuously based on time elapsed
-- Formula: `borrowed_amount * interest_rate * time_elapsed / (10000 * seconds_per_year)`
-- Uses saturating arithmetic to prevent overflow
+- Interest accrues on each `borrow` and `repay` using banker's rounding via `calculate_interest_with_rounding`
+- Formula: `principal * rate_bps * elapsed_seconds / (BASIS_POINTS_SCALE * SECONDS_PER_YEAR)`
+- Checked arithmetic; overflow surfaces as contract panic on mutating paths
 
 ### Overflow Protection
 
@@ -133,10 +160,8 @@ contract.set_pause(&admin, PauseType::Borrow, false)?;
 
 ```rust
 pub struct DebtPosition {
-    pub borrowed_amount: i128,    // Total borrowed
-    pub interest_accrued: i128,   // Accrued interest
-    pub last_update: u64,         // Last update timestamp
-    pub asset: Address,           // Borrowed asset
+    pub principal: i128,
+    pub last_update: u64,
 }
 ```
 
