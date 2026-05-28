@@ -9,6 +9,11 @@ The protocol expects a single Super Admin to be created during contract initiali
 The Super Admin has default clearance to all privileged operations around the protocol. Their address can be verified natively by ensuring the caller equals the stored admin via `admin::require_admin(&env, &caller)`.
 The Super Admin can seamlessly transfer their rights by calling `admin::set_admin(&env, new_admin, Some(current_admin))`.
 
+### Admin Rotation Invariant
+The protocol implements a secure two-step ownership handover for the Super Admin to prevent accidental transfers to wrong or uncontrolled addresses.
+1. **Propose:** The current admin calls `propose_admin(new_admin)`. This stores the `new_admin` as the pending admin.
+2. **Accept:** The `new_admin` calls `accept_admin()`. This clears the pending admin and officially transfers the Super Admin rights to the `new_admin`.
+
 ## Roles
 
 A flexible Role-Based Access Control (RBAC) was implemented to allow delegating specific operations to customized role types. Custom roles are identified by symbols (e.g. `Symbol::new(&env, "oracle_admin")`).

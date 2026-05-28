@@ -7,10 +7,12 @@ mod interest_drift_regression_tests {
     use crate::rounding_strategy::{
         calculate_interest_with_rounding, RoundingMode, SECONDS_PER_YEAR,
     };
+    use soroban_sdk::{Env, log};
 
     /// ✅ Test: 24-month accrual with banker's rounding shows bounded drift
     #[test]
     fn test_24_month_long_horizon_drift_bounded() {
+        let env = Env::default();
         let borrowed = 100_000i128; // $100,000
         let monthly_seconds = SECONDS_PER_YEAR / 12;
         let mut total_interest = 0i128;
@@ -39,6 +41,7 @@ mod interest_drift_regression_tests {
     /// ✅ Test: 100-month (8+ year) accrual with drift tracking
     #[test]
     fn test_long_horizon_100_months_drift_tracking() {
+        let env = Env::default();
         let borrowed = 50_000i128;
         let monthly_seconds = SECONDS_PER_YEAR / 12;
         let mut total_interest = 0i128;
@@ -100,6 +103,7 @@ mod interest_drift_regression_tests {
     /// ✅ Test: Different rounding modes bound drift differently
     #[test]
     fn test_rounding_modes_drift_comparison() {
+        let env = Env::default();
         let borrowed = 1000i128;
         let one_month = SECONDS_PER_YEAR / 12;
 
@@ -191,6 +195,6 @@ mod interest_drift_regression_tests {
         }
 
         // 100,000 * 1.0 = 100,000 exact
-        assert!(total >= 95_000 && total <= 105_000, "total: {}", total);
+        assert!((95_000..=105_000).contains(&total), "total: {}", total);
     }
 }

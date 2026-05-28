@@ -1,7 +1,7 @@
 # Zero-Amount Semantics
 
-**Reference:** Issue #646
-**Branch:** `docs/zero-amount-semantics-tests`
+**Reference:** Issue #646, Issue #805
+**Status:** **Enforced** — guards implemented in `stellar-lend/contracts/lending/src/lib.rs`
 **Test module:** `stellar-lend/contracts/lending/src/zero_amount_semantics_test.rs`
 
 ---
@@ -26,14 +26,14 @@ call is **never** a silent no-op; it always returns a typed `Err`.
 
 ### Core user-facing entrypoints
 
-| Entrypoint              | Parameter | Zero / Negative behaviour | Error returned                 |
-|-------------------------|-----------|---------------------------|--------------------------------|
-| `deposit`               | `amount`  | **Reject**                | `DepositError::InvalidAmount`  |
-| `deposit_collateral`    | `amount`  | **Reject**                | `BorrowError::InvalidAmount`   |
-| `withdraw`              | `amount`  | **Reject**                | `WithdrawError::InvalidAmount` |
-| `borrow`                | `amount`  | **Reject**                | `BorrowError::InvalidAmount`   |
-| `repay`                 | `amount`  | **Reject**                | `BorrowError::InvalidAmount`   |
-| `liquidate`             | `amount`  | **Reject**                | `BorrowError::InvalidAmount`   |
+| Entrypoint              | Parameter | Zero / Negative behaviour | Error returned                   | Enforced |
+|-------------------------|-----------|---------------------------|----------------------------------|----------|
+| `deposit`               | `amount`  | **Reject**                | `LendingError::InvalidAmount`    | ✅ #805  |
+| `deposit_collateral`    | `amount`  | **Reject**                | `LendingError::InvalidAmount`    |          |
+| `withdraw`              | `amount`  | **Reject**                | `LendingError::InvalidAmount`    | ✅ #805  |
+| `borrow`                | `amount`  | **Reject**                | `LendingError::InvalidAmount`    | ✅ #805  |
+| `repay`                 | `amount`  | **Reject**                | `LendingError::InvalidAmount`    | ✅ #805  |
+| `liquidate`             | `amount`  | **Reject**                | `LendingError::InvalidAmount`    |          |
 
 ### Cross-asset entrypoints
 
@@ -106,5 +106,6 @@ All tests live in:
 
 ## References
 
+- Issue: [#805 — Reject negative and zero amounts in deposit/withdraw/borrow/repay entrypoints](https://github.com/StellarLend/stellarlend-contracts/issues/805)
 - Issue: [#646 — Document and test ZERO amount semantics across all public entrypoints](https://github.com/StellarLend/stellarlend-contracts/issues/646)
 - Prior art: [#385 — Zero-Amount Operation Handling Tests](https://github.com/StellarLend/stellarlend-contracts/issues/385)
