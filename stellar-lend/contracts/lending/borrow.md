@@ -75,10 +75,22 @@ pub fn borrow(
 
 ### Collateral Ratio
 
-- **Minimum Ratio**: 150% (15000 basis points)
-- Users must provide collateral worth at least 1.5x the borrowed amount
-- Ratio is calculated as: `(collateral_amount * 10000) / borrow_amount`
-- Prevents under-collateralized positions that could lead to protocol insolvency
+- **Minimum Ratio**: 150% (15 000 basis points) — configurable by admin via `set_collateral_ratio`
+- Users must have collateral worth at least 1.5× their **total** debt (existing + new borrow)
+- Ratio is evaluated as:
+
+  ```
+  collateral * 10_000 / (existing_debt + amount) >= col_ratio
+  ```
+
+  Equivalently (overflow-safe form used in the contract):
+
+  ```
+  collateral * 10_000 >= col_ratio * (existing_debt + amount)
+  ```
+
+- The ratio is stored under the `"col_ratio"` instance-storage key; if unset the default of 15 000 bps applies
+- Prevents under-collateralised positions that could lead to protocol insolvency
 
 ### Interest Calculation
 

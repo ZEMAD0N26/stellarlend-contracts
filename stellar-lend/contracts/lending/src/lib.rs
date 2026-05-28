@@ -9,6 +9,15 @@ mod interest_drift_regression_test;
 use debt::*;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol};
 
+#[cfg(test)]
+mod property_invariants_test;
+
+fn require_positive_amount(amount: i128) {
+    if amount <= 0 {
+        panic!("amount must be positive");
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PositionSummary {
@@ -62,7 +71,13 @@ impl LendingContract {
     }
 
     /// Deposit collateral for a user.
-    pub fn deposit(env: Env, user: Address, amount: i128) -> i128 {
+    ///
+    /// # Errors
+    /// - [`LendingError::InvalidAmount`] if `amount` is zero or negative.
+    pub fn deposit(env: Env, user: Address, amount: i128) -> Result<i128, LendingError> {
+        if amount <= 0 {
+            return Err(LendingError::InvalidAmount);
+        }
         // Prevent mutating during an active flash loan callback
         let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
         if active {
@@ -71,12 +86,19 @@ impl LendingContract {
         user.require_auth();
         let key = ("col", user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
-        let new_balance = current + amount;
+        let new_balance = current.checked_add(amount).expect("collateral overflow");
         env.storage().persistent().set(&key, &new_balance);
-        new_balance
+        Ok(new_balance)
     }
 
-    pub fn withdraw(env: Env, user: Address, amount: i128) -> i128 {
+    /// Withdraw collateral for a user.
+    ///
+    /// # Errors
+    /// - [`LendingError::InvalidAmount`] if `amount` is zero or negative.
+    pub fn withdraw(env: Env, user: Address, amount: i128) -> Result<i128, LendingError> {
+        if amount <= 0 {
+            return Err(LendingError::InvalidAmount);
+        }
         // Prevent mutating during an active flash loan callback
         let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
         if active {
@@ -85,9 +107,12 @@ impl LendingContract {
         user.require_auth();
         let key = ("col", user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
-        let new_balance = current - amount;
+        if amount > current {
+            panic!("insufficient collateral");
+        }
+        let new_balance = current.checked_sub(amount).expect("collateral underflow");
         env.storage().persistent().set(&key, &new_balance);
-        new_balance
+        Ok(new_balance)
     }
 
     /// Borrow against deposited collateral.
@@ -105,7 +130,14 @@ impl LendingContract {
         updated.principal
     }
 
-    pub fn repay(env: Env, user: Address, amount: i128) -> i128 {
+    /// Repay outstanding debt for a user.
+    ///
+    /// # Errors
+    /// - [`LendingError::InvalidAmount`] if `amount` is zero or negative.
+    pub fn repay(env: Env, user: Address, amount: i128) -> Result<i128, LendingError> {
+        if amount <= 0 {
+            return Err(LendingError::InvalidAmount);
+        }
         // Prevent mutating during an active flash loan callback
         let active: bool = env.storage().instance().get(&"flash_active").unwrap_or(false);
         if active {
@@ -117,7 +149,7 @@ impl LendingContract {
         let updated = repay_amount(position, now, amount, DEFAULT_APR_BPS)
             .unwrap_or_else(|_| panic_with_debt_error());
         save_debt(&env, &user, &updated);
-        updated.principal
+        Ok(updated.principal)
     }
 
     pub fn get_debt_position(env: Env, user: Address) -> DebtPosition {
@@ -280,43 +312,34 @@ mod test {
     #[test]
     fn test_deposit_increases_balance() {
         let (_env, client, _admin, user) = setup();
-        let result = client.deposit(&user, &100);
-        assert_eq!(result, 100);
-        let again = client.deposit(&user, &50);
-        assert_eq!(again, 150);
+        assert_eq!(client.deposit(&user, &100), 100);
+        assert_eq!(client.deposit(&user, &50), 150);
     }
 
     #[test]
     fn test_withdraw_decreases_balance() {
         let (_env, client, _admin, user) = setup();
         client.deposit(&user, &100);
-        let result = client.withdraw(&user, &40);
-        assert_eq!(result, 60);
-    }
-
-    #[test]
-    fn test_borrow_increases_debt() {
-        let (_env, client, _admin, user) = setup();
-        let result = client.borrow(&user, &50);
-        assert_eq!(result, 50);
+        assert_eq!(client.withdraw(&user, &40), 60);
     }
 
     #[test]
     fn test_repay_decreases_debt() {
         let (_env, client, _admin, user) = setup();
-        client.borrow(&user, &100);
-        let result = client.repay(&user, &30);
-        assert_eq!(result, 70);
+        // Deposit enough collateral first (150 % of 100 = 150).
+        client.deposit(&user, &150);
+        client.borrow(&user, &100).unwrap();
+        assert_eq!(client.repay(&user, &30), 70);
     }
 
     #[test]
     fn test_position_summary_reflects_state() {
         let (_env, client, _admin, user) = setup();
-        client.deposit(&user, &200);
-        client.borrow(&user, &75);
+        client.deposit(&user, &300);
+        client.borrow(&user, &100).unwrap(); // 300/100 = 300 % ≥ 150 %
         let pos = client.get_position(&user);
-        assert_eq!(pos.collateral, 200);
-        assert_eq!(pos.debt, 75);
+        assert_eq!(pos.collateral, 300);
+        assert_eq!(pos.debt, 100);
     }
 
     #[test]
