@@ -18,23 +18,19 @@ This document describes the contracts-only emergency lifecycle implemented in th
 ## Authorized Calls
 
 - `set_guardian(admin, guardian)` -> admin only.
-- `emergency_shutdown(caller)` -> admin or guardian.
-- `start_recovery(admin)` -> admin only, only valid from `Shutdown`.
-- `complete_recovery(admin)` -> admin only.
+- `set_emergency_state(caller, new_state)` -> admin or guardian. Caller must present auth. Emits `EmergencyStateChanged(old_state, new_state)`.
+- Recovery lifecycle transitions (`Shutdown -> Recovery -> Normal`) are admin-only when moving out of `Shutdown`.
 
 ## Operation Policy by State
 
 - `Normal`:
-  - All operations follow existing granular pause rules.
-  - **Liquidation Policy**: See pause.md for detailed liquidation-pause matrix.
+  - All user-facing mutation entrypoints operate normally (subject to existing granular pause rules).
 - `Shutdown`:
-  - Block: `deposit`, `deposit_collateral`, `borrow`, `liquidate`, `flash_loan`, `repay`, `withdraw`.
+  - Block: `deposit`, `borrow`, `withdraw`, `repay`, `flash_loan`, `liquidate`, and other mutating entrypoints. (Contract is effectively read-only for users.)
   - Allow: view/read methods and admin recovery actions.
-  - **Liquidation Policy**: **BLOCKED** - Emergency stop prevents cascading failures.
 - `Recovery`:
-  - Allow: `repay`, `withdraw` (subject to granular pause and collateral checks).
-  - Block: `deposit`, `deposit_collateral`, `borrow`, `liquidate`, `flash_loan`.
-  - **Liquidation Policy**: **BLOCKED** - Unwind-only mode for safe position closure.
+  - Allow: `repay`, `withdraw` (users can reduce exposure and exit positions).
+  - Block: `deposit`, `borrow`, `flash_loan`, `liquidate`, and other operations that create new exposure.
 
 ## Security Notes
 
@@ -47,15 +43,14 @@ This document describes the contracts-only emergency lifecycle implemented in th
 
 | Operation              | Normal | Shutdown | Recovery | Notes                           |
 | ---------------------- | ------ | -------- | -------- | ------------------------------- |
-| `deposit`              | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
-| `deposit_collateral`   | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
-| `borrow`               | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
-| `repay`                | ✅\*   | ❌       | ✅\*     | Subject to granular pause rules |
-| `withdraw`             | ✅\*   | ❌       | ✅\*     | Subject to granular pause rules |
-| `liquidate`            | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
-| `flash_loan`           | ✅\*   | ❌       | ❌       | Subject to granular pause rules |
+| `deposit`              | ✅\*   | ❌       | ❌       | Blocked outside `Normal`        |
+| `borrow`               | ✅\*   | ❌       | ❌       | Blocked outside `Normal`        |
+| `repay`                | ✅\*   | ❌       | ✅\*     | Blocked in `Shutdown` only      |
+| `withdraw`             | ✅\*   | ❌       | ✅\*     | Blocked in `Shutdown` only      |
+| `flash_loan`           | ✅\*   | ❌       | ❌       | Blocked outside `Normal`        |
+| `liquidate`            | ✅\*   | ❌       | ❌       | Blocked outside `Normal`        |
 | View methods           | ✅     | ✅       | ✅       | Always available                |
-| Admin recovery actions | ✅     | ✅       | ✅       | Admin only                      |
+| Admin recovery actions | ✅     | ✅       | ✅       | Admin only to progress recovery |
 
 \*Subject to granular pause controls
 
