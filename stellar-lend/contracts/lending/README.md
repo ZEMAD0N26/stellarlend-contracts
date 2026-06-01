@@ -48,15 +48,29 @@ cargo test
 - `get_performance_stats(env)` - Returns gas/performance stats for the transaction.
 
 ### Admin & Risk Control
-- `initialize(env, admin, debt_ceiling, min_borrow_amount)` - Initial protocol setup.
-- `set_oracle(env, admin, oracle)` - Configure price feed source.
-- `set_pause(env, admin, pause_type, paused)` - Toggles granular or global pause state.
-- `set_guardian(env, admin, guardian)` - Configure emergency guardian authorized for shutdown.
-- `set_liquidation_threshold_bps(env, admin, bps)` - Set threshold for liquidations (e.g., 80%).
-- `set_close_factor_bps(env, admin, bps)` - Set max fraction liquidatable per call.
-- `emergency_shutdown(env, caller)` - Trigger hard protocol stop (Admin or Guardian).
-- `start_recovery(env, admin)` - Transition from Shutdown to Recovery mode.
-- `complete_recovery(env, admin)` - Return protocol to Normal operation from Recovery.
+
+> **Auth boundary** — every function below requires the stored admin to sign
+> the transaction (enforced by the internal `require_admin` helper).
+> `initialize` is the only exception: it is guarded by an already-initialized
+> check instead, preventing re-initialization after first call.
+
+- `initialize(env, admin) -> Result<(), LendingError>` — First-call-only
+  setup. Stores the admin and sets emergency state to `Normal`. Returns
+  `LendingError::AlreadyInitialized` on any subsequent call.
+- `get_admin(env) -> Result<Address, LendingError>` — Returns the stored
+  admin or `LendingError::NotInitialized`.
+- `propose_admin(env, new_admin) -> Result<(), LendingError>` — Admin-only.
+  Begins a two-step handover by recording a pending admin.
+- `accept_admin(env) -> Result<(), LendingError>` — Pending-admin-only.
+  Completes the handover; requires the new admin to sign.
+- `set_min_borrow(env, min_borrow) -> Result<(), LendingError>` — Admin-only.
+- `set_debt_ceiling(env, ceiling) -> Result<(), LendingError>` — Admin-only.
+- `set_flash_fee(env, fee_bps) -> Result<(), LendingError>` — Admin-only.
+  Validates `fee_bps` is in `[0, 1000]`.
+- `set_guardian(env, guardian) -> Result<(), LendingError>` — Admin-only.
+  Sets a secondary address allowed to trigger `set_emergency_state`.
+- `set_emergency_state(env, new_state) -> Result<(), LendingError>` — Admin
+  or guardian. Transitions between `Normal`, `Shutdown`, and `Recovery`.
 
 ### Governance (Upgrades)
 - `upgrade_init(env, admin, wasm_hash, threshold)` - Initialize upgrade manager.

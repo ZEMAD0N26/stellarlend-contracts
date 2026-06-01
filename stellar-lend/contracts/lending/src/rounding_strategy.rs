@@ -32,13 +32,6 @@ pub const INTEREST_PRECISION: i128 = 1_000_000; // 6 decimal places for intermed
 pub const SECONDS_PER_YEAR: u64 = 365 * 24 * 60 * 60; // 31,536,000
 pub const BASIS_POINTS_SCALE: i128 = 10_000;
 
-/// Errors that can occur during interest calculation and reconciliation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RoundingError {
-    InvalidParameters,
-    Overflow,
-    UnacceptableDrift,
-}
 
 /// Interest calculation result with full precision tracking
 #[derive(Clone, Debug)]

@@ -13,6 +13,21 @@ This document provides a central, canonical entry point for all project document
 These documents define the protocol’s core security model, including assumptions, invariants, and protections against reentrancy and malicious interactions.
 
 
+### Access Control & Admin
+
+- [Admin and Access Control](admin.md)
+- [Upgrade Authorization](UPGRADE_AUTHORIZATION.md)
+
+Covers the `initialize` single-call guard, the `require_admin` helper, the two-step admin rotation pattern, the guardian role, and the auth boundaries for all privileged entrypoints.
+
+
+### Integration
+
+- [Interface Quick Reference](interface_quick_reference.md)
+
+Single-page reference for frontend integrators: unit scales, entrypoint signatures, error code mappings, and integration checklist.
+
+
 ### Lending & Risk
 
 - [Risk Parameters](risk_params.md)

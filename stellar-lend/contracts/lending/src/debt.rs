@@ -24,6 +24,12 @@ impl From<&'static str> for DebtError {
     }
 }
 
+impl From<crate::rounding_strategy::RoundingError> for DebtError {
+    fn from(_: crate::rounding_strategy::RoundingError) -> Self {
+        DebtError::Overflow
+    }
+}
+
 pub fn load_debt(env: &Env, user: &Address) -> DebtPosition {
     let key = DataKey::Debt(user.clone());
     env.storage()
