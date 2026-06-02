@@ -3,13 +3,15 @@
 # scripts/deploy.sh – Deploy StellarLend Soroban contracts to testnet or mainnet
 #
 # Usage:
-#   ADMIN_SECRET_KEY=<secret_key> \
-#   ./scripts/deploy.sh [--network testnet|mainnet|futurenet] [--build]
+#   ADMIN_SECRET_KEY=<secret_key> [MAINNET_CONFIRM=YES_I_AM_SURE] \
+#   ./scripts/deploy.sh [--network testnet|mainnet|futurenet] [--build] [--dry-run]
 #
 # Environment variables (NEVER hardcode these – always supply at runtime):
 #   ADMIN_SECRET_KEY  Required. Stellar secret key for the deployer account.
 #                     Must start with 'S'. The deployer pays fees and becomes
 #                     the initial admin unless --admin-address is specified.
+#   MAINNET_CONFIRM   Required for mainnet deployment. Must be set to 'YES_I_AM_SURE'
+#                     to prevent accidental deployments.
 #   ADMIN_ADDRESS     Optional. A different Stellar address to set as the
 #                     contract admin. Defaults to the public key derived from
 #                     ADMIN_SECRET_KEY.
@@ -101,6 +103,27 @@ if [[ -z "${ADMIN_ADDRESS:-}" ]]; then
     ADMIN_ADDRESS="$(stellar keys generate --secret-key "$ADMIN_SECRET_KEY" --overwrite --quiet 2>/dev/null \
                     && stellar keys address 2>/dev/null || echo "")"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# Mainnet protection guard
+# ---------------------------------------------------------------------------
+if [[ "$NETWORK" == "mainnet" ]]; then
+  echo "======================================================================"
+  echo " !!! WARNING: DEPLOYING TO MAINNET !!!"
+  echo " Deployer PubKey : ${ADMIN_ADDRESS:-<could not derive - stellar CLI not found>}"
+  echo " Target RPC      : ${STELLAR_RPC_URL:-<default RPC configured in stellar CLI>}"
+  echo "======================================================================"
+
+  if [[ "${MAINNET_CONFIRM:-}" != "YES_I_AM_SURE" ]]; then
+    echo "ERROR: Deployment to mainnet requires explicit confirmation." >&2
+    echo "       Please set the environment variable:" >&2
+    echo "         export MAINNET_CONFIRM=YES_I_AM_SURE" >&2
+    echo "       Example:" >&2
+    echo "         MAINNET_CONFIRM=YES_I_AM_SURE ADMIN_SECRET_KEY=S... ./scripts/deploy.sh --network mainnet" >&2
+    exit 1
+  fi
+  echo "Mainnet deployment confirmed by MAINNET_CONFIRM=YES_I_AM_SURE."
 fi
 
 echo "======================================================================"

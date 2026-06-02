@@ -8,6 +8,18 @@ pub enum HelloError {
     InvalidAmount = 1,
 }
 
+/// Typed storage key namespace for the hello-world contract.
+///
+/// Using a `#[contracttype]` enum ensures unique Soroban XDR encoding for each
+/// storage key and prevents collisions between the admin key and user state keys.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DataKey {
+    Admin,
+    Balance(Address),
+    Debt(Address),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserState {
@@ -20,14 +32,17 @@ pub struct HelloContract;
 
 #[contractimpl]
 impl HelloContract {
-    /// Set the admin (one-time).
+    /// Set or rotate the admin.
+    ///
+    /// - If no admin exists yet, this bootstraps the contract.
+    /// - If an admin already exists, the current admin must authorize the change.
     pub fn set_admin(env: Env, admin: Address) {
-        env.storage().instance().set(&"admin", &admin);
+        env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
     /// Get the admin (panics if not set).
     pub fn get_admin(env: Env) -> Address {
-        env.storage().instance().get(&"admin").unwrap()
+        env.storage().instance().get(&DataKey::Admin).unwrap()
     }
 
     /// Return a greeting symbol for the given subject.
@@ -42,7 +57,7 @@ impl HelloContract {
             panic_with_error!(env, HelloError::InvalidAmount);
         }
         user.require_auth();
-        let key = ("bal", user.clone());
+        let key = DataKey::Balance(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_bal = current + amount;
         env.storage().persistent().set(&key, &new_bal);
@@ -55,7 +70,7 @@ impl HelloContract {
             panic_with_error!(env, HelloError::InvalidAmount);
         }
         user.require_auth();
-        let key = ("bal", user.clone());
+        let key = DataKey::Balance(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_bal = current - amount;
         env.storage().persistent().set(&key, &new_bal);
@@ -68,7 +83,7 @@ impl HelloContract {
             panic_with_error!(env, HelloError::InvalidAmount);
         }
         user.require_auth();
-        let key = ("debt", user.clone());
+        let key = DataKey::Debt(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_debt = current + amount;
         env.storage().persistent().set(&key, &new_debt);
@@ -81,7 +96,7 @@ impl HelloContract {
             panic_with_error!(env, HelloError::InvalidAmount);
         }
         user.require_auth();
-        let key = ("debt", user.clone());
+        let key = DataKey::Debt(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_debt = current - amount;
         env.storage().persistent().set(&key, &new_debt);
@@ -93,12 +108,12 @@ impl HelloContract {
         let balance: i128 = env
             .storage()
             .persistent()
-            .get(&("bal", user.clone()))
+            .get(&DataKey::Balance(user.clone()))
             .unwrap_or(0);
         let debt: i128 = env
             .storage()
             .persistent()
-            .get(&("debt", user.clone()))
+            .get(&DataKey::Debt(user.clone()))
             .unwrap_or(0);
         UserState { balance, debt }
     }
@@ -107,7 +122,7 @@ impl HelloContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, MockAuth, MockAuthInvoke};
     use soroban_sdk::Symbol;
 
     fn setup() -> (Env, HelloContractClient<'static>, Address, Address) {

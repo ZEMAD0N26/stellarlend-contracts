@@ -79,7 +79,11 @@ impl MultisigContract {
     /// # Errors
     /// * `AlreadyInitialized` - Contract already initialized
     /// * `InvalidThreshold` - Initial threshold is 0 or negative
-    pub fn initialize(env: Env, admin: Address, initial_threshold: u32) -> Result<(), MultisigError> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        initial_threshold: u32,
+    ) -> Result<(), MultisigError> {
         if env.storage().instance().has(&DataKey::Threshold) {
             return Err(MultisigError::AlreadyInitialized);
         }
@@ -88,9 +92,7 @@ impl MultisigContract {
             return Err(MultisigError::InvalidThreshold);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::Threshold, &initial_threshold);
@@ -334,7 +336,10 @@ mod tests {
         assert!(pending.is_some());
         let change = pending.unwrap();
         assert_eq!(change.new_threshold, 5);
-        assert_eq!(change.eta_ledger, initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+        assert_eq!(
+            change.eta_ledger,
+            initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS
+        );
     }
 
     #[test]
@@ -389,7 +394,8 @@ mod tests {
         let initial_ledger = env.ledger().sequence();
 
         // Jump past the delay
-        env.ledger().set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+        env.ledger()
+            .set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
 
         let result = client.apply_threshold_change();
         assert!(result.is_ok());
@@ -417,7 +423,8 @@ mod tests {
 
         client.queue_threshold_change(&5).unwrap();
         let initial_ledger = env.ledger().sequence();
-        env.ledger().set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+        env.ledger()
+            .set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
 
         // Disable mock_all_auths to enforce auth check
         env.mock_all_auths_allow_last();
@@ -436,7 +443,8 @@ mod tests {
         let initial_ledger = env.ledger().sequence();
 
         // Jump to after delay
-        env.ledger().set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+        env.ledger()
+            .set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
 
         // Apply first change
         client.apply_threshold_change().unwrap();
@@ -447,7 +455,8 @@ mod tests {
         let second_ledger = env.ledger().sequence();
 
         // Jump to after delay
-        env.ledger().set_sequence_number(second_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+        env.ledger()
+            .set_sequence_number(second_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
 
         // Apply second change
         client.apply_threshold_change().unwrap();
@@ -471,7 +480,8 @@ mod tests {
 
         // Apply should use the second change
         let initial_ledger = env.ledger().sequence();
-        env.ledger().set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+        env.ledger()
+            .set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
         client.apply_threshold_change().unwrap();
         assert_eq!(client.get_threshold().unwrap(), 7);
     }
@@ -496,7 +506,10 @@ mod tests {
     fn test_get_min_threshold_delay_ledgers() {
         let (env, admin, contract_id) = setup_initialized(3);
         let client = MultisigContractClient::new(&env, &contract_id);
-        assert_eq!(client.get_min_threshold_delay_ledgers(), MIN_THRESHOLD_DELAY_LEDGERS);
+        assert_eq!(
+            client.get_min_threshold_delay_ledgers(),
+            MIN_THRESHOLD_DELAY_LEDGERS
+        );
     }
 
     #[test]
@@ -507,13 +520,13 @@ mod tests {
         let client = MultisigContractClient::new(&env, &contract_id);
 
         let initial_ledger = env.ledger().sequence();
-        
+
         // Queue threshold change to 1 (hypothetical takeover attempt)
         client.queue_threshold_change(&1).unwrap();
-        
+
         // On same ledger, threshold is still 3
         assert_eq!(client.get_threshold().unwrap(), 3);
-        
+
         // Cannot apply on same ledger
         assert_eq!(
             client.apply_threshold_change(),
@@ -551,7 +564,8 @@ mod tests {
         client.queue_threshold_change(&5).unwrap();
 
         // Jump far past the delay
-        env.ledger().set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS * 2);
+        env.ledger()
+            .set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS * 2);
 
         // Should still succeed
         let result = client.apply_threshold_change();
@@ -568,7 +582,8 @@ mod tests {
         client.queue_threshold_change(&large_threshold).unwrap();
 
         let initial_ledger = env.ledger().sequence();
-        env.ledger().set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+        env.ledger()
+            .set_sequence_number(initial_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
 
         client.apply_threshold_change().unwrap();
         assert_eq!(client.get_threshold().unwrap(), large_threshold);

@@ -8,7 +8,7 @@ This note documents the contract boundaries under `stellar-lend/contracts/` and 
 
 `contracts/amm` is a separate optional deployment for AMM integration. It is not the source of truth for lending positions.
 
-`contracts/hello-world` is legacy and not canonical for deployment. It is not included in the active workspace at `stellar-lend/Cargo.toml`, while `contracts/lending`, `contracts/amm`, `contracts/bridge`, and `contracts/common` are.
+`contracts/hello-world` is legacy and not canonical for deployment. It remains in the active workspace at `stellar-lend/Cargo.toml` only so it compiles against the same shared Soroban SDK pin as the maintained contracts.
 
 ## Boundary Map
 
@@ -19,6 +19,39 @@ This note documents the contract boundaries under `stellar-lend/contracts/` and 
 | `hello-world` | Older all-in-one prototype with overlapping responsibilities | No |
 | `bridge` | Bridge-specific contract | Separate concern |
 | `common` | Shared library code | Library only |
+
+## Workspace Dependency Pinning
+
+The active Rust workspace is defined in `stellar-lend/Cargo.toml`. Soroban SDK
+and other shared Rust dependencies must be pinned once under
+`[workspace.dependencies]` and inherited by member crates with
+`{ workspace = true }`.
+
+Current workspace members:
+
+- `contracts/common`
+- `contracts/hello-world`
+- `contracts/lending`
+- `contracts/multisig`
+
+Policy:
+
+- do not pin `soroban-sdk` independently inside member crates
+- do not introduce a second Soroban SDK version through direct crate-level version specs
+- keep shared test dependencies, such as `proptest`, in the workspace dependency table when more than one member uses them
+- treat `contracts/hello-world` as a compatibility consumer of the shared pin, not as the canonical deployment artifact
+
+### Soroban SDK Version Bump Procedure
+
+When upgrading Soroban-related dependencies:
+
+1. Update the pinned versions in `stellar-lend/Cargo.toml` under `[workspace.dependencies]`.
+2. Keep member crates on `workspace = true` instead of adding crate-local versions.
+3. Refresh `Cargo.lock` from the workspace root and verify only the intended Soroban versions remain selected.
+4. Run `cargo build --workspace` and `cargo test --workspace` from `stellar-lend/` before merging.
+
+This keeps `Env`, `Address`, test utilities, and generated host types aligned
+across all workspace members and makes upgrade review a single-file audit.
 
 ## Ownership Boundaries
 
@@ -61,7 +94,7 @@ implementation errors and revert on violation.
 
 ### `hello-world`
 
-`hello-world` combines lending, AMM, bridge, governance, analytics, and monitoring concerns in one crate. Because it is outside the active workspace and duplicates functionality now split across maintained crates, it should be treated as historical/reference code rather than the deployment artifact.
+`hello-world` combines lending, AMM, bridge, governance, analytics, and monitoring concerns in one crate. Because it remains in the active workspace only for compatibility and duplicates functionality now split across maintained crates, it should be treated as historical/reference code rather than the deployment artifact.
 
 ## Trust Boundaries
 

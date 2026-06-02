@@ -17,6 +17,7 @@ export const config = {
   auth: {
     jwtSecret: process.env.JWT_SECRET || 'default-secret-change-me',
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
+    hookSecret: process.env.STELLAR_API_HOOK_SECRET || '',
   },
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),

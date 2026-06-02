@@ -33,7 +33,7 @@ fn test_cross_contract_auth_and_execution() {
     // Deploy Lending Contract
     let lending_id = env.register_contract_wasm(None, lending_contract::WASM);
     let lending_client = lending_contract::Client::new(&env, &lending_id);
-    
+
     // Initialize Lending Protocol
     let admin = Address::generate(&env);
     lending_client.initialize(&admin);
@@ -62,7 +62,10 @@ fn test_cross_contract_auth_and_execution() {
     // Verify Event Decoding
     let last_event = env.events().all().last().unwrap();
     assert_eq!(last_event.0, lending_id);
-    assert_eq!(last_event.1, vec![&env, Symbol::new(&env, "deposit_collateral").into_val(&env)]);
+    assert_eq!(
+        last_event.1,
+        vec![&env, Symbol::new(&env, "deposit_collateral").into_val(&env)]
+    );
 }
 
 // 3. Panic Bubbling Case
@@ -74,7 +77,7 @@ fn test_cross_contract_panic_bubbling() {
 
     let lending_id = env.register_contract_wasm(None, lending_contract::WASM);
     let lending_client = lending_contract::Client::new(&env, &lending_id);
-    
+
     let admin = Address::generate(&env);
     lending_client.initialize(&admin);
 
@@ -82,7 +85,7 @@ fn test_cross_contract_panic_bubbling() {
     let stub_client = StubBorrowerClient::new(&env, &stub_id);
 
     let user = Address::generate(&env);
-    
+
     // Passing an invalid 0 or negative amount to trigger an internal lending protocol validation panic
     stub_client.proxy_deposit(&lending_id, &user, &0_i128);
 }

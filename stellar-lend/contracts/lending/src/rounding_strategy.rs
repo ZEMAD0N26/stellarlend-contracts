@@ -22,6 +22,7 @@ pub const INTEREST_PRECISION: i128 = 1_000_000; // 6 decimal places for intermed
 pub const SECONDS_PER_YEAR: u64 = 365 * 24 * 60 * 60; // 31,536,000
 pub const BASIS_POINTS_SCALE: i128 = 10_000;
 
+/// Interest calculation result with full precision tracking
 #[derive(Clone, Debug)]
 pub struct InterestCalcResult {
     pub interest: i128,
@@ -82,12 +83,8 @@ pub fn calculate_interest_with_rounding(
     let remainder = with_precision % denominator;
 
     // Step 5: Apply rounding strategy
-    let (rounded_interest, _actual_remainder) = apply_rounding(
-        full_division,
-        remainder,
-        denominator,
-        mode,
-    );
+    let (rounded_interest, _actual_remainder) =
+        apply_rounding(full_division, remainder, denominator, mode);
 
     // Step 6: Back-convert from precision scale
     let mut final_interest = rounded_interest / INTEREST_PRECISION;
@@ -97,7 +94,8 @@ pub fn calculate_interest_with_rounding(
     // due to subtle integer division edge-cases. Compute the floor-rounded
     // integer interest and clamp the ceil result to be >= floor.
     if mode == RoundingMode::Ceil {
-        let (floor_rounded, _) = apply_rounding(full_division, remainder, denominator, RoundingMode::Floor);
+        let (floor_rounded, _) =
+            apply_rounding(full_division, remainder, denominator, RoundingMode::Floor);
         let floor_interest = floor_rounded / INTEREST_PRECISION;
         if final_interest < floor_interest {
             final_interest = floor_interest;
@@ -159,7 +157,10 @@ pub fn reconcile_debt_with_drift_correction(
     }
 
     // Return reconciled debt and updated drift
-    Ok((freshly_calculated_debt, accumulated_drift + (freshly_calculated_debt - stored_debt)))
+    Ok((
+        freshly_calculated_debt,
+        accumulated_drift + (freshly_calculated_debt - stored_debt),
+    ))
 }
 
 #[cfg(test)]
@@ -168,7 +169,8 @@ mod tests {
 
     #[test]
     fn test_zero_borrowed_returns_zero_interest() {
-        let result = calculate_interest_with_rounding(0, 365 * 24 * 60 * 60, 500, RoundingMode::Floor);
+        let result =
+            calculate_interest_with_rounding(0, 365 * 24 * 60 * 60, 500, RoundingMode::Floor);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().interest, 0);
     }
@@ -181,7 +183,8 @@ mod tests {
             SECONDS_PER_YEAR,
             500, // 5%
             RoundingMode::Floor,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Expected: 100 * 0.05 = 5
         assert_eq!(result.interest, 5);
@@ -193,16 +196,14 @@ mod tests {
         let result_floor = calculate_interest_with_rounding(
             1000,
             SECONDS_PER_YEAR / 12, // 1 month
-            500, // 5% APR
+            500,                   // 5% APR
             RoundingMode::Floor,
-        ).unwrap();
+        )
+        .unwrap();
 
-        let result_ceil = calculate_interest_with_rounding(
-            1000,
-            SECONDS_PER_YEAR / 12,
-            500,
-            RoundingMode::Ceil,
-        ).unwrap();
+        let result_ceil =
+            calculate_interest_with_rounding(1000, SECONDS_PER_YEAR / 12, 500, RoundingMode::Ceil)
+                .unwrap();
 
         // Ceil should round up from floor
         assert!(result_ceil.interest >= result_floor.interest);
@@ -233,6 +234,74 @@ mod tests {
             (95..=105).contains(&total_interest),
             "total_interest: {}",
             total_interest
+        );
+    }
+
+    #[test]
+    fn test_scaling_constants_are_canonical() {
+        assert_eq!(INTEREST_PRECISION, 1_000_000);
+        assert_eq!(BASIS_POINTS_SCALE, 10_000);
+        assert_eq!(SECONDS_PER_YEAR, 31_536_000);
+
+        let denominator = (SECONDS_PER_YEAR as i128) * BASIS_POINTS_SCALE;
+        assert_eq!(denominator, 315_360_000_000);
+    }
+
+    #[test]
+    fn test_bps_to_decimal_conversion() {
+        assert_eq!(500 * INTEREST_PRECISION / BASIS_POINTS_SCALE, 50_000);
+        assert_eq!(
+            10_000 * INTEREST_PRECISION / BASIS_POINTS_SCALE,
+            INTEREST_PRECISION
+        );
+        assert_eq!(1_000 * INTEREST_PRECISION / BASIS_POINTS_SCALE, 100_000);
+    }
+
+    #[test]
+    fn test_one_year_exact_no_remainder() {
+        let result =
+            calculate_interest_with_rounding(100, SECONDS_PER_YEAR, 500, RoundingMode::Bankers)
+                .unwrap();
+        assert_eq!(result.interest, 5);
+        assert_eq!(result.remainder, 0);
+    }
+
+    #[test]
+    fn test_one_second_small_fractional_interest() {
+        let result =
+            calculate_interest_with_rounding(100_000, 1, 500, RoundingMode::Bankers).unwrap();
+        assert_eq!(result.interest, 0);
+    }
+
+    #[test]
+    fn test_one_month_bankers_rounding() {
+        let result = calculate_interest_with_rounding(
+            1_000,
+            SECONDS_PER_YEAR / 12,
+            500,
+            RoundingMode::Bankers,
+        )
+        .unwrap();
+        assert_eq!(result.interest, 4);
+    }
+
+    #[test]
+    fn test_ceil_never_below_floor() {
+        let floor_result = calculate_interest_with_rounding(
+            1_000,
+            SECONDS_PER_YEAR / 12,
+            500,
+            RoundingMode::Floor,
+        )
+        .unwrap();
+        let ceil_result =
+            calculate_interest_with_rounding(1_000, SECONDS_PER_YEAR / 12, 500, RoundingMode::Ceil)
+                .unwrap();
+        assert!(
+            ceil_result.interest >= floor_result.interest,
+            "Ceil interest ({}) must be >= Floor interest ({})",
+            ceil_result.interest,
+            floor_result.interest
         );
     }
 }

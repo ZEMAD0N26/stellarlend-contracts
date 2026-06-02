@@ -495,3 +495,12 @@ For operational questions or emergency situations:
 - **Security Incidents**: [Security Team Contact]
 - **Governance Questions**: [Governance Forum]
 - **Emergency Contact**: [24/7 Emergency Line]
+
+## Vesting Treasury Sink
+
+When a vesting grant is revoked by the configured admin, any unvested tokens are clawed back and deposited to the protocol treasury address. Operators should note:
+
+- **Revocation Authority**: Only the configured `admin` may call `revoke(grantee)`.
+- **Cliff Behavior**: No tokens become claimable until `now >= start + cliff_seconds`.
+- **Treasury Sink**: Unvested balance at the time of revoke is transferred to the protocol treasury address configured in the vesting contract.
+- **Monitoring**: Watch vesting revoke events and treasury inflows to detect unexpected revocations.

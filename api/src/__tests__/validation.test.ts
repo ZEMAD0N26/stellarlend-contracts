@@ -81,3 +81,44 @@ describe('Validation Middleware', () => {
     });
   });
 });
+
+describe('Hook HMAC Validation', () => {
+  const mockReq = {
+    headers: {},
+    body: {},
+    rawBody: '{}',
+  } as any;
+  const mockRes = {} as any;
+  const next = jest.fn();
+
+  beforeEach(() => {
+    process.env.STELLAR_API_HOOK_SECRET = 'validation-hook-secret';
+  });
+
+  it('rejects missing hook headers', () => {
+    jest.isolateModules(() => {
+      const { verifyHookHmac } = require('../middleware/auth');
+      expect(() => verifyHookHmac(mockReq, mockRes, next)).toThrow(
+        'Hook signature and timestamp headers are required'
+      );
+    });
+  });
+
+  it('rejects invalid hook timestamp', () => {
+    jest.isolateModules(() => {
+      const { verifyHookHmac } = require('../middleware/auth');
+      const req = {
+        headers: {
+          'x-hook-timestamp': 'not-a-number',
+          'x-hook-signature': 'abcd',
+        },
+        body: {},
+        rawBody: '{}',
+      } as any;
+
+      expect(() => verifyHookHmac(req, mockRes, next)).toThrow(
+        'Invalid hook timestamp'
+      );
+    });
+  });
+});

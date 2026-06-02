@@ -109,6 +109,14 @@ export const withdraw = async (req: Request, res: Response, next: NextFunction) 
   }
 };
 
+export const processHook = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    return res.status(200).json({ success: true, message: 'Hook authenticated' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const healthCheck = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const services = await stellarService.healthCheck();

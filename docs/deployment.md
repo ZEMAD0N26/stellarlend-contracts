@@ -133,8 +133,8 @@ export ADMIN_SECRET_KEY="S..."   # deployer secret key – never commit this
 # Build first, then deploy
 ./scripts/deploy.sh --network testnet --build
 
-# Mainnet
-./scripts/deploy.sh --network mainnet
+# Mainnet (requires MAINNET_CONFIRM=YES_I_AM_SURE environment variable)
+MAINNET_CONFIRM=YES_I_AM_SURE ./scripts/deploy.sh --network mainnet
 ```
 
 The script writes the contract IDs to `scripts/deployed/<network>/`:
@@ -397,11 +397,13 @@ Before deploying to mainnet:
 - [ ] Oracle price feeds configured via `update_price_feed`
 - [ ] Emergency pause tested: `set_emergency_pause(admin, true)` → confirmed paused
 - [ ] Emergency pause disabled before launch: `set_emergency_pause(admin, false)`
+- [ ] `MAINNET_CONFIRM=YES_I_AM_SURE` environment variable provided to bypass the safety guard preventing accidental mainnet deployments
 
 ```bash
 # Mainnet deploy + init
 export ADMIN_SECRET_KEY="S..."          # from secure store
 export ADMIN_ADDRESS="G..."             # multisig / hardware wallet
+export MAINNET_CONFIRM="YES_I_AM_SURE"  # explicit confirmation guard
 
 ./scripts/deploy.sh --network mainnet --build
 export LENDING_CONTRACT_ID="$(cat scripts/deployed/mainnet/lending_contract_id.txt)"

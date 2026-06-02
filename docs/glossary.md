@@ -120,3 +120,7 @@ Previously each crate declared its own `LendingError` or `Error` enum. To migrat
 3. Replace all inline BPS denominators (`10_000`, `10000`) with `BPS_DENOM`.
 4. Use `scale_bps` / `unscale_bps` for checked percentage arithmetic instead of
    hand-written `checked_mul` / `checked_div` pairs.
+
+## Related Documentation
+
+- [`stellar-lend/docs/INTEREST_NUMERIC_ASSUMPTIONS.md`](../stellar-lend/docs/INTEREST_NUMERIC_ASSUMPTIONS.md) - Canonical interest scaling constants, BPS conversions, rounding modes, and worked examples
