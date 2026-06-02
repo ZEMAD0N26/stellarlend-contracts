@@ -26,6 +26,13 @@
 #   --amm-default-slippage Default slippage in bps (default: 100 = 1%)
 #   --amm-max-slippage     Max slippage in bps     (default: 1000 = 10%)
 #   --amm-auto-swap-threshold  Min amount for auto-swap (default: 1000000)
+#   --amm-min-out-bps      Suggested minimum-output floor in bps for swap
+#                          callers (default: 50 = 0.5%).  This value is NOT
+#                          stored on-chain; it is a documentation hint that
+#                          off-chain callers should use when computing the
+#                          `min_out` argument to `AmmContract::swap`.
+#                          Example: for amount_in=1000 and min_out_bps=50,
+#                          set min_out = 1000 * (10000 - 50) / 10000 = 995.
 #   --help                 Print this help and exit.
 #
 # Initialization parameters (lending contract):
@@ -67,6 +74,10 @@ INIT_AMM=false
 AMM_DEFAULT_SLIPPAGE=100     # 1 %
 AMM_MAX_SLIPPAGE=1000        # 10 %
 AMM_AUTO_SWAP_THRESHOLD=1000000
+# Suggested minimum-output floor for swap callers (not stored on-chain).
+# Off-chain integrators should derive min_out as:
+#   min_out = amount_in * (10000 - AMM_MIN_OUT_BPS) / 10000
+AMM_MIN_OUT_BPS=50           # 0.5 %
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -78,6 +89,7 @@ while [[ $# -gt 0 ]]; do
     --amm-default-slippage)      AMM_DEFAULT_SLIPPAGE="$2"; shift 2 ;;
     --amm-max-slippage)          AMM_MAX_SLIPPAGE="$2"; shift 2 ;;
     --amm-auto-swap-threshold)   AMM_AUTO_SWAP_THRESHOLD="$2"; shift 2 ;;
+    --amm-min-out-bps)           AMM_MIN_OUT_BPS="$2"; shift 2 ;;
     --help)
       sed -n '2,70p' "$0"
       exit 0
@@ -163,6 +175,7 @@ if $INIT_AMM; then
   echo "    default_slippage      : $AMM_DEFAULT_SLIPPAGE bps"
   echo "    max_slippage          : $AMM_MAX_SLIPPAGE bps"
   echo "    auto_swap_threshold   : $AMM_AUTO_SWAP_THRESHOLD"
+  echo "    (hint) min_out_bps    : $AMM_MIN_OUT_BPS bps  <-- caller suggestion only, not stored on-chain"
 
   stellar contract invoke \
     --id "$AMM_CONTRACT_ID" \

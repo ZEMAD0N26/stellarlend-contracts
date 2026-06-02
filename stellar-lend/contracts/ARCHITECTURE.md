@@ -48,6 +48,17 @@ This is the contract users, liquidators, and token contracts should treat as aut
 
 It does not own lending solvency state, debt balances, or collateral balances.
 
+### Constant-product invariant
+
+The AMM implementation enforces a constant-product invariant guard on all
+mutating operations (swaps and liquidity changes). Each path computes the
+pool product `k = reserve_a * reserve_b` before and after the mutation and
+asserts the expected monotonic direction: swaps and liquidity additions must
+not decrease `k` (fees are retained in the pool), while liquidity removals
+must not increase `k`. This check is implemented in the helper
+`assert_k_monotonic` in the `contracts/amm` crate to detect rounding or
+implementation errors and revert on violation.
+
 ### `hello-world`
 
 `hello-world` combines lending, AMM, bridge, governance, analytics, and monitoring concerns in one crate. Because it is outside the active workspace and duplicates functionality now split across maintained crates, it should be treated as historical/reference code rather than the deployment artifact.
@@ -176,6 +187,77 @@ Important existing bounds include:
 - `lending` flash-loan fee: `0..=1000`
 - `amm` slippage bounded by configured `max_slippage`
 - positive-amount checks on swap and liquidity inputs
+
+## AMM Swap: `min_out` and `deadline` Parameters
+
+`AmmContract::swap` now requires two additional safety parameters that **must
+be supplied by every caller**:
+
+```
+pub fn swap(
+    env:       Env,
+    caller:    Address,
+    asset_in:  Address,
+    asset_out: Address,
+    amount_in: i128,
+    min_out:   i128,   // NEW – minimum acceptable output (>= 0)
+    deadline:  u64,    // NEW – latest valid ledger timestamp (seconds)
+) -> Result<SwapResult, AmmError>
+```
+
+### Guard ordering (both checked before any state mutation)
+
+| # | Condition | Error |
+|---|-----------|-------|
+| 1 | `env.ledger().timestamp() > deadline` | `DeadlineExpired` |
+| 2 | `amount_out < min_out` | `SlippageExceeded` |
+
+The deadline is checked **before** the slippage floor. This means a transaction
+that is both stale and would produce sub-minimum output will surface
+`DeadlineExpired`, not `SlippageExceeded`.
+
+### Security rationale
+
+- **`deadline`** rejects transactions that were signed for a different market
+  state but sat in the mempool long enough for prices to move against the
+  caller. Pass the current ledger timestamp plus a small grace window (e.g.,
+  30–60 seconds / ledger-time equivalent).
+- **`min_out`** provides a hard slippage floor that prevents sandwich attacks:
+  a block-producer cannot insert trades that move the price against the caller
+  beyond the declared tolerance.
+
+### Caller migration guide
+
+Callers that previously invoked `swap(caller, asset_in, asset_out, amount_in)`
+must now supply `min_out` and `deadline`.
+
+**Recommended derivation** (off-chain, before building the transaction):
+
+```
+// 1. Simulate the swap to get expected_out.
+// 2. Apply your slippage tolerance (e.g. 50 bps = 0.5 %).
+let min_out  = expected_out * (10_000 - slippage_bps) / 10_000;
+
+// 3. Set deadline to now + grace_window (in ledger-time seconds).
+let deadline = current_ledger_timestamp + 60;  // 60-second window
+```
+
+To **opt out** of a guard (not recommended in production):
+- Pass `min_out = 0` to skip the slippage check.
+- Pass `deadline = u64::MAX` to skip the deadline check.
+
+**`scripts/init.sh` hint**: the `--amm-min-out-bps` flag (default `50`) is
+printed during AMM initialisation as a documentation hint for the suggested
+slippage tolerance. It is not stored on-chain.
+
+### Error reference
+
+| Error | Meaning |
+|-------|---------|
+| `AmmError::InvalidAmount (4)` | `amount_in <= 0` |
+| `AmmError::InvalidMinOut (5)` | `min_out < 0` |
+| `AmmError::DeadlineExpired (6)` | ledger timestamp > `deadline` |
+| `AmmError::SlippageExceeded (7)` | `amount_out < min_out` |
 
 ## Recommendation
 

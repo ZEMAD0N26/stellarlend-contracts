@@ -13,14 +13,35 @@ export type { OracleServiceConfig } from './types/index.js';
 
 dotenv.config();
 
-/**
- * Environment variable validation schema
- */
+export interface AssetPriceBounds {
+    minPrice: number;
+    maxPrice: number;
+}
+
+const boundsSchema = z.record(
+    z.enum(['XLM', 'USDC', 'USDT', 'BTC', 'ETH']),
+    z.object({
+        minPrice: z.coerce.number().positive(),
+        maxPrice: z.coerce.number().positive(),
+    }),
+).refine(
+    (bounds) =>
+        Object.values(bounds).every(
+            (entry) => entry.maxPrice > entry.minPrice,
+        ),
+    {
+        message: 'Each asset bound must have maxPrice > minPrice',
+    },
+);
+
 const envSchema = z.object({
     STELLAR_NETWORK: z.enum(['testnet', 'mainnet']).default('testnet'),
     STELLAR_RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
     CONTRACT_ID: z.string().min(1, 'CONTRACT_ID is required'),
     ADMIN_SECRET_KEY: z.string().min(1, 'ADMIN_SECRET_KEY is required'),
+    ADMIN_API_PORT: z.coerce.number().int().nonnegative().default(0),
+    ADMIN_HMAC_SECRET: z.string().min(1).optional(),
+    PRICE_BOUNDS_JSON: z.string().optional(),
     COINGECKO_API_KEY: z.string().optional(),
     COINMARKETCAP_API_KEY: z.string().optional(),
     REDIS_URL: z.string().url().optional().or(z.literal('')),
@@ -46,6 +67,26 @@ function parseEnv() {
     }
 
     return result.data;
+}
+
+function parsePriceBounds(raw?: string) {
+    if (!raw) {
+        return {} as Partial<Record<SupportedAsset, AssetPriceBounds>>;
+    }
+
+    try {
+        const parsed = JSON.parse(raw);
+        const parsedResult = boundsSchema.safeParse(parsed);
+
+        if (!parsedResult.success) {
+            throw parsedResult.error;
+        }
+
+        return parsedResult.data;
+    } catch (error) {
+        console.error('❌ PRICE_BOUNDS_JSON validation failed:', error);
+        throw new Error('Invalid PRICE_BOUNDS_JSON configuration');
+    }
 }
 
 /**
@@ -129,6 +170,18 @@ export const ASSET_MAPPINGS: AssetMapping[] = [
     },
 ];
 
+export const DEFAULT_PRICE_BOUNDS: Record<SupportedAsset, AssetPriceBounds> = {
+    XLM: { minPrice: 0.00001, maxPrice: 1000000 },
+    USDC: { minPrice: 0.9, maxPrice: 1.1 },
+    USDT: { minPrice: 0.9, maxPrice: 1.1 },
+    BTC: { minPrice: 1000, maxPrice: 200000 },
+    ETH: { minPrice: 100, maxPrice: 20000 },
+};
+
+export function getPriceBounds(asset: string): AssetPriceBounds | undefined {
+    return DEFAULT_PRICE_BOUNDS[asset.toUpperCase() as SupportedAsset];
+}
+
 /**
  * Get asset mapping by symbol
  */
@@ -148,12 +201,18 @@ export function isSupportedAsset(symbol: string): symbol is SupportedAsset {
  */
 export function loadConfig(): OracleServiceConfig {
     const env = parseEnv();
+    const priceBounds = {
+        ...DEFAULT_PRICE_BOUNDS,
+        ...parsePriceBounds(env.PRICE_BOUNDS_JSON),
+    };
 
     return {
         stellarNetwork: env.STELLAR_NETWORK,
         stellarRpcUrl: env.STELLAR_RPC_URL,
         contractId: env.CONTRACT_ID,
         adminSecretKey: env.ADMIN_SECRET_KEY,
+        adminApiPort: env.ADMIN_API_PORT,
+        adminHmacSecret: env.ADMIN_HMAC_SECRET,
         updateIntervalMs: env.UPDATE_INTERVAL_MS,
         maxPriceDeviationPercent: env.MAX_PRICE_DEVIATION_PERCENT,
         priceStaleThresholdSeconds: env.PRICE_STALENESS_THRESHOLD_SECONDS,
@@ -161,6 +220,7 @@ export function loadConfig(): OracleServiceConfig {
         redisUrl: env.REDIS_URL,
         logLevel: env.LOG_LEVEL,
         providers: getProviderConfigs(env),
+        priceBounds,
     };
 }
 
