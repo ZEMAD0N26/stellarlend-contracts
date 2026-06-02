@@ -13,10 +13,21 @@ situations or maintenance windows.
   shutdown without waiting for full governance latency.
 - **Recovery Mode**: After a shutdown the admin can move the protocol into a controlled unwind mode
   so users can repay debt and withdraw collateral.
-- **Event Driven**: Every pause state change emits a `pause_event` for transparent off-chain
+- **Event Driven**: Every pause state change emits a `PauseStateChangedEvent` for transparent off-chain
   monitoring.
+- **Auto-Expiry**: Each pause switch carries an `expires_at_ledger` and automatically clears when
+  ledger sequence progresses past its expiry.
 - **Read-Only Mode**: A lightweight incident response switch that blocks all state-changing
   operations while keeping view functions available.
+
+## Auto-Expiry Lifecycle
+
+- Each granular pause is stored as a struct with `paused: bool` and `expires_at_ledger: u32`.
+- A pause is considered active only while `env.ledger().sequence() <= expires_at_ledger`.
+- When ledger sequence exceeds `expires_at_ledger`, the paused operation is treated as unpaused
+  without any storage rewrite.
+- Operators should either explicitly extend an active pause with `extend_pause(operation, new_expiry)`
+  or re-issue a new pause after expiry.
 
 ## Operation Types
 
@@ -107,26 +118,19 @@ The protocol follows an explicit liquidation policy that balances **solvency pro
 
 ### Admin Functions
 
-#### `set_pause(admin: Address, pause_type: PauseType, paused: bool) -> Result<(), BorrowError>`
+#### `set_pause(admin: Address, operation: PauseType, paused: bool, expires_at_ledger: u32) -> Result<(), LendingError>`
 
 Toggles the pause state for a specific operation or the entire protocol.
 
 - **Requires Authorization**: Yes (by `admin`).
-- **Emits**: `pause_event`.
+- **Emits**: `PauseStateChangedEvent`.
 
-#### `set_deposit_paused(paused: bool) -> Result<(), DepositError>`
+#### `extend_pause(admin: Address, operation: PauseType, new_expiry: u32) -> Result<(), LendingError>`
 
-Convenience wrapper for `set_pause(…, PauseType::Deposit, paused)`.
+Extends an active pause state to a later ledger sequence.
 
-- **Requires Authorization**: Yes (admin derived from storage).
-- **Emits**: `pause_event`.
-
-#### `set_withdraw_paused(paused: bool) -> Result<(), WithdrawError>`
-
-Convenience wrapper for `set_pause(…, PauseType::Withdraw, paused)`.
-
-- **Requires Authorization**: Yes (admin derived from storage).
-- **Emits**: `pause_event`.
+- **Requires Authorization**: Yes (by `admin`).
+- **Emits**: `PauseStateChangedEvent`.
 
 #### `set_guardian(admin: Address, guardian: Address) -> Result<(), BorrowError>`
 
@@ -244,11 +248,11 @@ fully unwind positions. All other entry points remain blocked.
 
 ## Events
 
-| Event                 | Topic                   | Emitted by                                                  |
-| --------------------- | ----------------------- | ----------------------------------------------------------- |
-| `PauseEvent`          | `pause_event`           | `set_pause`, `set_deposit_paused`, `set_withdraw_paused`    |
-| `GuardianSetEvent`    | `guardian_set_event`    | `set_guardian`                                              |
-| `EmergencyStateEvent` | `emergency_state_event` | `emergency_shutdown`, `start_recovery`, `complete_recovery` |
+| Event                      | Topic                     | Emitted by                                |
+| -------------------------- | ------------------------- | ----------------------------------------- |
+| `PauseStateChangedEvent`   | `pause_state_changed_event` | `set_pause`, `extend_pause`               |
+| `GuardianSetEvent`         | `guardian_set_event`      | `set_guardian`                            |
+| `EmergencyStateEvent`      | `emergency_state_event`   | `emergency_shutdown`, `start_recovery`, `complete_recovery` |
 
 ## Security Assumptions
 

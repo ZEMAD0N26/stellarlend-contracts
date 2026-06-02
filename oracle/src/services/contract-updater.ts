@@ -13,7 +13,7 @@ import {
     nativeToScVal,
 } from '@stellar/stellar-sdk';
 import type { ContractUpdateResult, AggregatedPrice } from '../types/index.js';
-import { logger } from '../utils/logger.js';
+import { logger, hashPublicKey } from '../utils/logger.js';
 
 /**
  * Contract updater configuration
@@ -45,6 +45,8 @@ export class ContractUpdater {
     private server: SorobanRpc.Server;
     private adminKeypair: Keypair;
     private networkPassphrase: string;
+    /** SHA-256 prefix of the admin public key, safe for logging. */
+    private adminKeyPrefix: string;
 
     constructor(config: ContractUpdaterConfig) {
         this.config = { ...DEFAULT_CONFIG, ...config } as ContractUpdaterConfig;
@@ -55,10 +57,13 @@ export class ContractUpdater {
             ? Networks.TESTNET
             : Networks.PUBLIC;
 
+        // Hash once at startup; raw key is never emitted to logs.
+        this.adminKeyPrefix = hashPublicKey(this.adminKeypair.publicKey());
+
         logger.info('Contract updater initialized', {
             network: this.config.network,
             contractId: this.config.contractId,
-            adminPublicKey: this.adminKeypair.publicKey(),
+            adminKeyPrefix: this.adminKeyPrefix,
         });
     }
 

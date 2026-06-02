@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ContractUpdater, createContractUpdater } from '../src/services/contract-updater.js';
+import { hashPublicKey } from '../src/utils/logger.js';
 import type { AggregatedPrice } from '../src/types/index.js';
 
 // Mock Stellar SDK
@@ -377,6 +378,97 @@ describe('ContractUpdater', () => {
 
             expect(result).toBeDefined();
             expect(result.asset).toBe('XLM');
+        });
+    });
+
+    describe('logging redaction', () => {
+        it('should not log the raw admin public key at startup', async () => {
+            const { logger } = await import('../src/utils/logger.js');
+            const captured: string[] = [];
+            const infoSpy = vi.spyOn(logger, 'info').mockImplementation((...args: unknown[]) => {
+                captured.push(JSON.stringify(args));
+                return logger;
+            });
+
+            createContractUpdater(mockConfig);
+
+            const combined = captured.join(' ');
+            // The raw public key must never appear in any logger.info call
+            expect(combined).not.toContain('GTEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+            infoSpy.mockRestore();
+        });
+
+        it('should log adminKeyPrefix in sha256:<8-hex-chars> format at startup', async () => {
+            const { logger } = await import('../src/utils/logger.js');
+            const captured: string[] = [];
+            const infoSpy = vi.spyOn(logger, 'info').mockImplementation((...args: unknown[]) => {
+                captured.push(JSON.stringify(args));
+                return logger;
+            });
+
+            createContractUpdater(mockConfig);
+
+            const combined = captured.join(' ');
+            // The logged output must contain a sha256 prefix token
+            expect(combined).toMatch(/sha256:[0-9a-f]{8}/);
+
+            infoSpy.mockRestore();
+        });
+
+        it('hashPublicKey should produce deterministic sha256:<8-hex-chars> output', () => {
+            const pubkey = 'GTEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            const result1 = hashPublicKey(pubkey);
+            const result2 = hashPublicKey(pubkey);
+
+            expect(result1).toBe(result2);
+            expect(result1).toMatch(/^sha256:[0-9a-f]{8}$/);
+        });
+
+        it('hashPublicKey should produce different prefixes for different keys', () => {
+            const keyA = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+            const keyB = 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+
+            expect(hashPublicKey(keyA)).not.toBe(hashPublicKey(keyB));
+        });
+
+        it('should not expose raw public key in retry warn logs', async () => {
+            const warnMessages: string[] = [];
+            const { logger } = await import('../src/utils/logger.js');
+            vi.spyOn(logger, 'warn').mockImplementation((...args: unknown[]) => {
+                warnMessages.push(JSON.stringify(args));
+                return logger;
+            });
+
+            // Force a failure path by making simulateTransaction throw
+            const { SorobanRpc } = await import('@stellar/stellar-sdk');
+            const mockServer = new SorobanRpc.Server('mock');
+            vi.spyOn(mockServer, 'simulateTransaction').mockRejectedValue(
+                new Error('forced network error'),
+            );
+
+            await updater.updatePrice('XLM', 150000n, Date.now());
+
+            const combined = warnMessages.join(' ');
+            expect(combined).not.toContain('GTEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+        });
+
+        it('should not expose raw public key in error logs after all retries exhausted', async () => {
+            const errorMessages: string[] = [];
+            const { logger } = await import('../src/utils/logger.js');
+            vi.spyOn(logger, 'error').mockImplementation((...args: unknown[]) => {
+                errorMessages.push(JSON.stringify(args));
+                return logger;
+            });
+
+            const { SorobanRpc } = await import('@stellar/stellar-sdk');
+            vi.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(true);
+
+            const failUpdater = createContractUpdater({ ...mockConfig, maxRetries: 1 });
+            await failUpdater.updatePrice('XLM', 150000n, Date.now());
+
+            const combined = errorMessages.join(' ');
+            expect(combined).not.toContain('GTEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ');
         });
     });
 
