@@ -1,4 +1,6 @@
-use soroban_sdk::contracttype;
+// ════════════════════════════════════════════════════════════════
+// ROUNDING STRATEGY - Fix interest accrual drift
+// ════════════════════════════════════════════════════════════════
 
 /// Rounding strategy for interest calculations
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,5 +193,33 @@ mod tests {
 
         // Ceil should round up from floor
         assert!(result_ceil.interest >= result_floor.interest);
+    }
+
+    #[test]
+    fn test_long_horizon_no_drift_with_bankers() {
+        // 24 months of monthly accruals
+        let mut total_interest = 0i128;
+        let borrowed = 1000i128;
+        let monthly_seconds = SECONDS_PER_YEAR / 12;
+
+        for _ in 0..24 {
+            let result = calculate_interest_with_rounding(
+                borrowed,
+                monthly_seconds,
+                500, // 5% APR
+                RoundingMode::Bankers,
+            )
+            .unwrap();
+
+            total_interest += result.interest;
+        }
+
+        // 24 * (1000 * 0.05 / 12) ≈ 100
+        // Should be close to 100 with bankers rounding
+        assert!(
+            (95..=105).contains(&total_interest),
+            "total_interest: {}",
+            total_interest
+        );
     }
 }

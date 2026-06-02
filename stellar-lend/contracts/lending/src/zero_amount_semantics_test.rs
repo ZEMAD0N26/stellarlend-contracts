@@ -247,6 +247,38 @@ fn repay_negative_does_not_mutate_debt() {
     assert_eq!(before, after, "debt must not change on negative repay");
 }
 
+#[test]
+fn repay_exact_reduces_debt_to_zero() {
+    let (_env, client, user) = setup();
+    client.borrow(&user, &100);
+
+    let remaining = client.repay(&user, &100).unwrap();
+
+    assert_eq!(remaining, 0);
+    assert_eq!(client.get_position(&user).debt, 0);
+}
+
+#[test]
+fn repay_overpay_clamps_debt_to_zero() {
+    let (_env, client, user) = setup();
+    client.borrow(&user, &100);
+
+    let remaining = client.repay(&user, &150).unwrap();
+
+    assert_eq!(remaining, 0);
+    assert_eq!(client.get_position(&user).debt, 0);
+}
+
+#[test]
+fn repay_with_no_debt_returns_zero() {
+    let (_env, client, user) = setup();
+
+    let remaining = client.repay(&user, &50).unwrap();
+
+    assert_eq!(remaining, 0);
+    assert_eq!(client.get_position(&user).debt, 0);
+}
+
 // ---------------------------------------------------------------------------
 // get_position is read-only and must never be affected by guard changes
 // ---------------------------------------------------------------------------
