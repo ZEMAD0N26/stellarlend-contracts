@@ -43,7 +43,6 @@ mod interest_drift_regression_tests {
         let borrowed = 50_000i128;
         let monthly_seconds = SECONDS_PER_YEAR / 12;
         let mut total_interest = 0i128;
-        let mut _total_drift = 0i128;
 
         for _month in 0..100 {
             let result = calculate_interest_with_rounding(
@@ -55,7 +54,6 @@ mod interest_drift_regression_tests {
             .expect("should not overflow");
 
             total_interest += result.interest;
-            total_drift += result.remainder;
         }
 
         // 100 months ≈ 8.33 years

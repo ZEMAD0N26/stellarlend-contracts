@@ -22,6 +22,7 @@ pub const INTEREST_PRECISION: i128 = 1_000_000; // 6 decimal places for intermed
 pub const SECONDS_PER_YEAR: u64 = 365 * 24 * 60 * 60; // 31,536,000
 pub const BASIS_POINTS_SCALE: i128 = 10_000;
 
+/// Interest calculation result with full precision tracking
 #[derive(Clone, Debug)]
 pub struct InterestCalcResult {
     pub interest: i128,
