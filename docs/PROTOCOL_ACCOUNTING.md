@@ -185,21 +185,22 @@ pub fn repay(env: Env, user: Address, amount: i128) -> Result<i128, LendingError
 - Emergency state is not Shutdown
 - No active flash loan
 - User authorizes transaction
-- `amount > 0` (implicit via checked_sub)
+- `amount > 0`
 
 **Atomicity:**
 1. Settle accrual on `user.debt` (add interest to principal)
-2. Update `user.debt.principal -= amount`
-3. Update `TotalDebt -= amount`
+2. Update `user.debt.principal -= min(amount, current debt)`
+3. Update `TotalDebt -= min(amount, current debt)`
 
 **Postconditions:**
-- `user.debt.principal` decreased by `amount`
-- `TotalDebt` decreased by `amount`
+- `user.debt.principal` is decreased by the repaid amount, clamped at zero
+- `TotalDebt` is decreased by the same clamped amount
+- Remaining debt principal after repay is returned
 - Invariant 1 maintained
 
 **Failure modes:**
-- Insufficient debt (amount > principal)
-- `Overflow`: Arithmetic underflow
+- `InvalidAmount`: `amount <= 0`
+- `Overflow`: Arithmetic overflow during debt accrual
 
 ## Interest Accrual & Accounting
 
