@@ -90,8 +90,21 @@ pub fn calculate_interest_with_rounding(
     );
 
     // Step 6: Back-convert from precision scale
-    let final_interest = rounded_interest / INTEREST_PRECISION;
-    let final_remainder = rounded_interest % INTEREST_PRECISION;
+    let mut final_interest = rounded_interest / INTEREST_PRECISION;
+    let mut final_remainder = rounded_interest % INTEREST_PRECISION;
+
+    // Safety: ensure Ceil never produces a lower integer interest than Floor
+    // due to subtle integer division edge-cases. Compute the floor-rounded
+    // integer interest and clamp the ceil result to be >= floor.
+    if mode == RoundingMode::Ceil {
+        let (floor_rounded, _) = apply_rounding(full_division, remainder, denominator, RoundingMode::Floor);
+        let floor_interest = floor_rounded / INTEREST_PRECISION;
+        if final_interest < floor_interest {
+            final_interest = floor_interest;
+            final_remainder = 0;
+        }
+    }
+
     Ok(InterestCalcResult::new(
         final_interest,
         final_remainder,
