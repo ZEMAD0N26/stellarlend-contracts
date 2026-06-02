@@ -28,7 +28,3 @@ codegen-units = 1
 [profile.release-with-logs]
 inherits = "release"
 debug-assertions = true
-
-[[test]]
-name = "interest_drift_regression_test"
-path = "contracts/lending/tests/interest_drift_regression_test.rs"

@@ -1,12 +1,14 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, Env, Symbol,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, Env, Vec,
 };
 
 /// Minimum threshold delay in ledgers (7 days = ~604,800 seconds / 5 sec per ledger = ~120,960 ledgers)
 /// Using conservative estimate: 600,000 ledgers for 7 days
 const MIN_THRESHOLD_DELAY_LEDGERS: u32 = 600_000;
+/// Default proposal lifetime in ledgers (14 days at ~5 seconds per ledger).
+const DEFAULT_PROPOSAL_EXPIRY_LEDGERS: u32 = 1_200_000;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +21,12 @@ pub enum DataKey {
     PendingThresholdChange,
     /// Ledger number when contract was initialized
     InitializedLedger,
+    /// Monotonic proposal id counter
+    ProposalCounter,
+    /// Proposal keyed by id
+    Proposal(u64),
+    /// Stored approvals keyed by proposal id
+    ProposalApprovals(u64),
 }
 
 #[contracterror]
@@ -37,6 +45,16 @@ pub enum MultisigError {
     NotInitialized = 1005,
     /// Contract already initialized
     AlreadyInitialized = 1006,
+    /// Proposal does not exist
+    ProposalNotFound = 1007,
+    /// Proposal timelock has not elapsed
+    ProposalNotReady = 1008,
+    /// Proposal was already executed
+    ProposalAlreadyExecuted = 1009,
+    /// Proposal expiry ledger has passed
+    ProposalExpired = 1010,
+    /// Proposal parameters are invalid
+    InvalidProposal = 1011,
 }
 
 #[contracttype]
@@ -44,6 +62,16 @@ pub enum MultisigError {
 pub struct ThresholdChange {
     pub new_threshold: u32,
     pub eta_ledger: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Proposal {
+    pub id: u64,
+    pub new_threshold: u32,
+    pub eta_ledger: u32,
+    pub expires_at_ledger: u32,
+    pub executed: bool,
 }
 
 #[contractevent]
@@ -245,6 +273,159 @@ impl MultisigContract {
         .publish(&env);
 
         Ok(())
+    }
+
+    /// Create a threshold-change proposal with an explicit expiry ledger.
+    ///
+    /// The current admin is recorded as the first approver. Execution remains
+    /// unavailable until the threshold-change delay has elapsed and permanently
+    /// fails once `env.ledger().sequence() > expires_at_ledger`.
+    pub fn create_proposal(
+        env: Env,
+        new_threshold: u32,
+        expires_at_ledger: u32,
+    ) -> Result<u64, MultisigError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        if new_threshold == 0 {
+            return Err(MultisigError::InvalidThreshold);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if expires_at_ledger <= current_ledger {
+            return Err(MultisigError::InvalidProposal);
+        }
+
+        let eta_ledger = current_ledger + MIN_THRESHOLD_DELAY_LEDGERS;
+        if expires_at_ledger < eta_ledger {
+            return Err(MultisigError::InvalidProposal);
+        }
+
+        let next_id = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCounter)
+            .unwrap_or(0u64)
+            + 1;
+
+        let proposal = Proposal {
+            id: next_id,
+            new_threshold,
+            eta_ledger,
+            expires_at_ledger,
+            executed: false,
+        };
+
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(admin);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &next_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::Proposal(next_id), &proposal);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalApprovals(next_id), &approvals);
+
+        Ok(next_id)
+    }
+
+    /// Create a proposal with the default 14-day expiry window.
+    pub fn create_proposal_with_default_expiry(
+        env: Env,
+        new_threshold: u32,
+    ) -> Result<u64, MultisigError> {
+        let expires_at_ledger = env.ledger().sequence() + DEFAULT_PROPOSAL_EXPIRY_LEDGERS;
+        Self::create_proposal(env, new_threshold, expires_at_ledger)
+    }
+
+    /// Get a proposal by id.
+    pub fn get_proposal(env: Env, id: u64) -> Option<Proposal> {
+        env.storage().instance().get(&DataKey::Proposal(id))
+    }
+
+    /// Get the approvals stored for a proposal id.
+    pub fn get_proposal_approvals(env: Env, id: u64) -> Option<Vec<Address>> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ProposalApprovals(id))
+    }
+
+    /// Execute a stored proposal if it is still fresh and its delay has elapsed.
+    ///
+    /// Execution rejects stale approvals once `current_ledger > expires_at_ledger`,
+    /// so old quorums cannot be replayed against newer protocol state.
+    pub fn execute_proposal(env: Env, id: u64) -> Result<(), MultisigError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        let mut proposal: Proposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::Proposal(id))
+            .ok_or(MultisigError::ProposalNotFound)?;
+
+        if proposal.executed {
+            return Err(MultisigError::ProposalAlreadyExecuted);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger > proposal.expires_at_ledger {
+            return Err(MultisigError::ProposalExpired);
+        }
+
+        if current_ledger < proposal.eta_ledger {
+            return Err(MultisigError::ProposalNotReady);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &proposal.new_threshold);
+        proposal.executed = true;
+        env.storage()
+            .instance()
+            .set(&DataKey::Proposal(id), &proposal);
+
+        Ok(())
+    }
+
+    /// Remove expired proposal and approval records from instance storage.
+    ///
+    /// Only the admin may run cleanup. Fresh proposals and executed proposals are
+    /// retained for auditability; expired unexecuted proposals are safe to remove
+    /// because they can never execute. Returns the number of proposals removed.
+    pub fn cleanup_expired(env: Env, ids: Vec<u64>) -> Result<u32, MultisigError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        let current_ledger = env.ledger().sequence();
+        let mut removed = 0u32;
+
+        for id in ids.iter() {
+            if let Some(proposal) = env
+                .storage()
+                .instance()
+                .get::<DataKey, Proposal>(&DataKey::Proposal(id))
+            {
+                if !proposal.executed && current_ledger > proposal.expires_at_ledger {
+                    env.storage().instance().remove(&DataKey::Proposal(id));
+                    env.storage()
+                        .instance()
+                        .remove(&DataKey::ProposalApprovals(id));
+                    removed += 1;
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// Get the default proposal expiry window in ledgers.
+    pub fn get_default_proposal_expiry_ledgers(_env: Env) -> u32 {
+        DEFAULT_PROPOSAL_EXPIRY_LEDGERS
     }
 
     /// Get the minimum threshold delay in ledgers.
@@ -587,5 +768,119 @@ mod tests {
 
         client.apply_threshold_change().unwrap();
         assert_eq!(client.get_threshold().unwrap(), large_threshold);
+    }
+
+    #[test]
+    fn test_execute_fresh_proposal_ok() {
+        let (env, _admin, contract_id) = setup_initialized(3);
+        let client = MultisigContractClient::new(&env, &contract_id);
+
+        let current_ledger = env.ledger().sequence();
+        let expires_at = current_ledger + MIN_THRESHOLD_DELAY_LEDGERS + 10;
+        let proposal_id = client.create_proposal(&5, &expires_at).unwrap();
+
+        env.ledger()
+            .set_sequence_number(current_ledger + MIN_THRESHOLD_DELAY_LEDGERS);
+
+        assert_eq!(client.execute_proposal(&proposal_id), Ok(()));
+        assert_eq!(client.get_threshold().unwrap(), 5);
+
+        let proposal = client.get_proposal(&proposal_id).unwrap();
+        assert!(proposal.executed);
+        assert_eq!(proposal.expires_at_ledger, expires_at);
+    }
+
+    #[test]
+    fn test_execute_expired_proposal_rejected() {
+        let (env, _admin, contract_id) = setup_initialized(3);
+        let client = MultisigContractClient::new(&env, &contract_id);
+
+        let current_ledger = env.ledger().sequence();
+        let expires_at = current_ledger + MIN_THRESHOLD_DELAY_LEDGERS;
+        let proposal_id = client.create_proposal(&5, &expires_at).unwrap();
+
+        env.ledger().set_sequence_number(expires_at + 1);
+
+        assert_eq!(
+            client.execute_proposal(&proposal_id),
+            Err(Ok(MultisigError::ProposalExpired))
+        );
+        assert_eq!(client.get_threshold().unwrap(), 3);
+
+        let proposal = client.get_proposal(&proposal_id).unwrap();
+        assert!(!proposal.executed);
+    }
+
+    #[test]
+    fn test_execute_proposal_at_exact_expiry_ok() {
+        let (env, _admin, contract_id) = setup_initialized(3);
+        let client = MultisigContractClient::new(&env, &contract_id);
+
+        let current_ledger = env.ledger().sequence();
+        let expires_at = current_ledger + MIN_THRESHOLD_DELAY_LEDGERS;
+        let proposal_id = client.create_proposal(&5, &expires_at).unwrap();
+
+        env.ledger().set_sequence_number(expires_at);
+
+        assert_eq!(client.execute_proposal(&proposal_id), Ok(()));
+        assert_eq!(client.get_threshold().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_execute_proposal_before_eta_rejected() {
+        let (env, _admin, contract_id) = setup_initialized(3);
+        let client = MultisigContractClient::new(&env, &contract_id);
+
+        let current_ledger = env.ledger().sequence();
+        let expires_at = current_ledger + MIN_THRESHOLD_DELAY_LEDGERS + 10;
+        let proposal_id = client.create_proposal(&5, &expires_at).unwrap();
+
+        assert_eq!(
+            client.execute_proposal(&proposal_id),
+            Err(Ok(MultisigError::ProposalNotReady))
+        );
+        assert_eq!(client.get_threshold().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_cleanup_expired_frees_keys() {
+        let (env, _admin, contract_id) = setup_initialized(3);
+        let client = MultisigContractClient::new(&env, &contract_id);
+
+        let current_ledger = env.ledger().sequence();
+        let expires_at = current_ledger + MIN_THRESHOLD_DELAY_LEDGERS;
+        let expired_id = client.create_proposal(&5, &expires_at).unwrap();
+        let fresh_id = client
+            .create_proposal(&7, &(expires_at + MIN_THRESHOLD_DELAY_LEDGERS))
+            .unwrap();
+
+        assert!(client.get_proposal(&expired_id).is_some());
+        assert!(client.get_proposal_approvals(&expired_id).is_some());
+
+        env.ledger().set_sequence_number(expires_at + 1);
+
+        let mut ids = Vec::new(&env);
+        ids.push_back(expired_id);
+        ids.push_back(fresh_id);
+        assert_eq!(client.cleanup_expired(&ids), Ok(1));
+
+        assert!(client.get_proposal(&expired_id).is_none());
+        assert!(client.get_proposal_approvals(&expired_id).is_none());
+        assert!(client.get_proposal(&fresh_id).is_some());
+        assert!(client.get_proposal_approvals(&fresh_id).is_some());
+    }
+
+    #[test]
+    fn test_create_proposal_rejects_expiry_before_eta() {
+        let (env, _admin, contract_id) = setup_initialized(3);
+        let client = MultisigContractClient::new(&env, &contract_id);
+
+        let current_ledger = env.ledger().sequence();
+        let expires_too_soon = current_ledger + MIN_THRESHOLD_DELAY_LEDGERS - 1;
+
+        assert_eq!(
+            client.create_proposal(&5, &expires_too_soon),
+            Err(Ok(MultisigError::InvalidProposal))
+        );
     }
 }
