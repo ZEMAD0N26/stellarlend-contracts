@@ -27,6 +27,41 @@ interest = principal * elapsed_seconds * rate_bps / (SECONDS_PER_YEAR * 10_000)
 
 `SECONDS_PER_YEAR = 31_536_000`.
 
+### Interest Accrual Ordering on Repay
+
+**Security Invariant**: Interest MUST be accrued BEFORE the repay amount is subtracted from the debt.
+
+The order of operations on `repay` is:
+1. **Accrue interest** based on elapsed time since `last_update`
+2. **Apply repayment** to the accrued total (principal + interest)
+3. **Update timestamp** to current ledger time
+
+This ordering ensures users cannot avoid interest by timing their repayments. If the order were reversed (apply-then-accrue), users could repay before interest accrues, effectively getting interest-free loans.
+
+**Test Coverage**: The ordering invariant is verified by comprehensive ledger-time-advancement tests in `src/interest_ordering_time_test.rs`, covering:
+- Zero elapsed time (immediate repay)
+- Exact one-year boundary
+- Repay smaller than accrued interest
+- Multiple borrows and repays with time gaps
+- Adversarial timing attempts
+- Timestamp boundary conditions
+
+**Example**:
+```rust
+// User borrows 10,000 at t=0
+borrow(user, 10_000);
+
+// One year passes (t=31,536,000)
+// Interest accrues: 10,000 * 5% = 500
+// Total debt: 10,500
+
+// User repays 1,000
+repay(user, 1_000);
+
+// Remaining debt: 10,500 - 1,000 = 9,500
+// NOT: 10,000 - 1,000 + 500 = 9,500 (wrong order)
+```
+
 ## Overview
 
 The borrow function allows users to borrow assets from the StellarLend protocol by providing collateral. The system enforces minimum collateral ratios, tracks interest accrual, and respects protocol-level constraints such as debt ceilings and pause states.

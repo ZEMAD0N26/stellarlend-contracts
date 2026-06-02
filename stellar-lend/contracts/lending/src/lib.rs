@@ -6,7 +6,10 @@ pub mod rounding_strategy;
 #[cfg(test)]
 mod interest_drift_regression_test;
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, IntoVal};
+#[cfg(test)]
+mod interest_ordering_time_test;
+
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol};
 use debt::{borrow_amount, load_debt, save_debt, DebtPosition, DEFAULT_APR_BPS, repay_amount, effective_debt};
 
 /// Maximum desired persistent TTL for position entries, in ledgers.
@@ -30,12 +33,8 @@ const DEFAULT_DEPOSIT_CAP: i128 = 100_000_000_000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DataKey {
     Admin,
-    PendingAdmin,
     EmergencyState,
     Guardian,
-    BorrowMinAmount,
-    FlashActive,
-    FlashFeeBps,
     Collateral(Address),
     Debt(Address),
     Balance(Address, Address),
@@ -46,9 +45,28 @@ pub enum DataKey {
     DepositCap,
 }
 
-// ---------------------------------------------------------------------------
-// Emergency circuit-breaker
-// ---------------------------------------------------------------------------
+fn acquire_reentrancy_lock(env: &Env) {
+    let locked: bool = env
+        .storage()
+        .temporary()
+        .get(&REENTRANCY_LOCK_KEY)
+        .unwrap_or(false);
+    if locked {
+        panic!("reentrant call");
+    }
+    env.storage().temporary().set(&REENTRANCY_LOCK_KEY, &true);
+}
+
+fn release_reentrancy_lock(env: &Env) {
+    env.storage().temporary().remove(&REENTRANCY_LOCK_KEY);
+}
+
+fn with_reentrancy_lock<T>(env: &Env, f: impl FnOnce() -> T) -> T {
+    acquire_reentrancy_lock(env);
+    let result = f();
+    release_reentrancy_lock(env);
+    result
+}
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,19 +194,8 @@ pub struct LendingContract;
 #[contractimpl]
 impl LendingContract {
     pub fn initialize(env: Env, admin: Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic!("AlreadyInitialized");
-        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         set_emergency_state_internal(&env, EmergencyState::Normal);
-
-        // Emit schema version event on initialize
-        env.events().publish(
-            (Symbol::new(&env, "schema_version_set"),),
-            SchemaVersionEvent {
-                schema_version: EVENT_SCHEMA_VERSION,
-            },
-        );
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -603,6 +610,33 @@ impl LendingContract {
     }
 }
 
+fn get_emergency_state(env: &Env) -> EmergencyState {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyState)
+        .unwrap_or(EmergencyState::Normal)
+}
+
+fn set_emergency_state_internal(env: &Env, state: EmergencyState) {
+    env.storage().instance().set(&DataKey::EmergencyState, &state);
+}
+
+fn check_emergency_status(env: &Env, action: ProtocolAction) {
+    let state = get_emergency_state(env);
+    match state {
+        EmergencyState::Normal => {}
+        EmergencyState::Shutdown => {
+            panic!("OperationDisabledDuringShutdown");
+        }
+        EmergencyState::Recovery => match action {
+            ProtocolAction::Repay | ProtocolAction::Withdraw => {}
+            _ => {
+                panic!("ActionBlockedInRecovery");
+            }
+        },
+    }
+}
+
 fn panic_with_debt_error() -> ! {
     panic!("debt operation failed");
 }
@@ -616,6 +650,10 @@ fn extend_debt_ttl(env: &Env, user: &Address) {
     let key = DataKey::Debt(user.clone());
     env.storage().persistent().extend_ttl(&key, PERSISTENT_TTL_LEDGERS, PERSISTENT_TTL_LEDGERS);
 }
+
+const DEFAULT_DEPOSIT_CAP: i128 = i128::MAX;
+const REENTRANCY_LOCK_KEY: &str = "reentrancy_lock";
+
 #[cfg(test)]
 mod test {
     use super::*;
