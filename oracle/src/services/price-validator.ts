@@ -113,6 +113,7 @@ export class PriceValidator {
                 timestamp: raw.timestamp,
                 source: raw.source,
                 confidence: this.calculateConfidence(raw, cachedPrice),
+                volume24h: raw.volume24h,
             };
 
             this.cachedPrices.set(raw.asset, raw.price);

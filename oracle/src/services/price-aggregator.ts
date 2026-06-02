@@ -191,14 +191,28 @@ export class PriceAggregator {
     }
 
     /**
-     * Calculate weighted median of prices
+     * Calculate weighted median of prices.
+     *
+     * Weight selection (in priority order):
+     *  1. `price.volume24h` – 24-hour quote volume supplied by the provider (e.g. Binance).
+     *     A higher volume means the pair is more liquid and its price is more reliable.
+     *  2. Static `provider.weight` – configured priority fraction used when no volume is available.
+     *
+     * Using volume as the weight means thin/illiquid pairs automatically carry less influence
+     * during aggregation without any manual tuning.
      */
     private weightedMedian(prices: PriceData[]): bigint {
         const sorted = [...prices].sort((a, b) =>
             a.price < b.price ? -1 : a.price > b.price ? 1 : 0
         );
 
+        // Derive a numeric weight for each price point.
         const weights = sorted.map((p) => {
+            if (p.volume24h !== undefined && p.volume24h > 0n) {
+                // Convert bigint volume to a Number for weight arithmetic.
+                // Precision loss is acceptable here: we only need relative ordering.
+                return Number(p.volume24h);
+            }
             const provider = this.providers.find((pr) => pr.name === p.source);
             return provider?.weight ?? 0.1;
         });

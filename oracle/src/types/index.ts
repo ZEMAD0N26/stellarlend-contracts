@@ -14,6 +14,8 @@ export interface PriceData {
     timestamp: number;
     source: string;
     confidence: number;
+    /** 24-hour quote volume in USD, carried from the raw provider response. Used as weight in aggregation. */
+    volume24h?: bigint;
 }
 
 /**
@@ -24,6 +26,8 @@ export interface RawPriceData {
     price: number;
     timestamp: number;
     source: string;
+    /** 24-hour quote volume in USD (integer, scaled to avoid floats). Used as weight in aggregation. */
+    volume24h?: bigint;
 }
 
 /**

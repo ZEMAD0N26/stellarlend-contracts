@@ -98,6 +98,30 @@ This script will:
 ### Binance (Secondary)
 - Public market data API
 - Priority: 2, Weight: 40%
+- Exposes 24-hour quote volume (`quoteVolume` from `/api/v3/ticker/24hr`), which is used as the
+  aggregation weight when available (see **Volume-Weighted Median** below).
+
+## Volume-Weighted Median
+
+The aggregator uses a weighted-median algorithm to combine prices from multiple sources.
+The weight assigned to each price point follows this priority:
+
+| Priority | Condition | Weight used |
+|----------|-----------|-------------|
+| 1 | `volume24h` is present and `> 0` | `Number(volume24h)` – 24 h quote volume in USD |
+| 2 | `volume24h` is absent or zero | Static `provider.weight` from `ProviderConfig` |
+
+**Why volume?**  
+Liquid pairs (high volume) are harder to manipulate and track true market prices more
+accurately. By weighting prices by 24 h volume, thin or illiquid pairs automatically
+contribute less to the aggregated price during volatility, without any manual tuning.
+
+**Mixing sources:**  
+When some providers supply volume and others do not, both weight types can coexist in
+the same aggregation round. Volume weights are typically many orders of magnitude larger
+than static weights (e.g. `2_000_000` vs `0.4`), so any provider that supplies a
+meaningful volume will effectively dominate the median. Providers without volume data
+retain their relative influence through their static `weight` setting.
 
 ## Programmatic Usage
 
