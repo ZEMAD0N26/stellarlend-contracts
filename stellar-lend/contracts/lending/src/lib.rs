@@ -102,29 +102,6 @@ pub struct PositionSummary {
     pub health_factor: i128,
 }
 
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum Error {
-    BelowMinimumBorrow = 1008,
-    NotInitialized = 1009,
-    AlreadyInitialized = 1010,
-    PositionHealthy = 1011,
-}
-
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum LendingError {
-    InvalidAmount = 1004,
-    BelowMinimumBorrow = 1008,
-    NotInitialized = 1009,
-    AlreadyInitialized = 1010,
-    DebtCeilingExceeded = 2001,
-    DepositCapExceeded = 2002,
-    Overflow = 2003,
-}
-
 #[contract]
 pub struct LendingContract;
 
@@ -639,7 +616,7 @@ mod test {
         li.sequence_number = li.sequence_number.saturating_add(seconds as u32);
         env.ledger().set(li);
     }
-
+}
     #[test]
     fn test_initialize_and_get_admin() {
         let (_env, client, admin, _user) = setup();
