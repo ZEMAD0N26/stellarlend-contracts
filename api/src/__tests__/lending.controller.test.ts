@@ -1,14 +1,23 @@
 import request from 'supertest';
-import app from '../app';
-import { StellarService } from '../services/stellar.service';
 
-jest.mock('../services/stellar.service');
+const mockStellarService = {
+  buildDepositTransaction: jest.fn(),
+  buildBorrowTransaction: jest.fn(),
+  buildRepayTransaction: jest.fn(),
+  buildWithdrawTransaction: jest.fn(),
+  submitTransaction: jest.fn(),
+  monitorTransaction: jest.fn(),
+  healthCheck: jest.fn(),
+};
+
+jest.mock('../services/stellar.service', () => ({
+  StellarService: jest.fn(() => mockStellarService),
+}));
+
+const app = require('../app').default;
 
 describe('Lending Controller', () => {
-  let mockStellarService: jest.Mocked<StellarService>;
-
   beforeEach(() => {
-    mockStellarService = new StellarService() as jest.Mocked<StellarService>;
     jest.clearAllMocks();
   });
 
@@ -30,14 +39,12 @@ describe('Lending Controller', () => {
         ledger: 12345,
       });
 
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
-
       const response = await request(app)
         .post('/api/lending/deposit')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '1000000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
       expect(response.status).toBe(200);
@@ -49,9 +56,9 @@ describe('Lending Controller', () => {
       const response = await request(app)
         .post('/api/lending/deposit')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '0',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
       expect(response.status).toBe(400);
@@ -61,10 +68,24 @@ describe('Lending Controller', () => {
       const response = await request(app)
         .post('/api/lending/deposit')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
         });
 
       expect(response.status).toBe(400);
+    });
+
+    it('should pass deposit build errors to error handler', async () => {
+      mockStellarService.buildDepositTransaction = jest.fn().mockRejectedValue(new Error('boom'));
+
+      const response = await request(app)
+        .post('/api/lending/deposit')
+        .send({
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
+          amount: '1000000',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
+        });
+
+      expect(response.status).toBe(500);
     });
   });
 
@@ -86,14 +107,12 @@ describe('Lending Controller', () => {
         ledger: 12345,
       });
 
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
-
       const response = await request(app)
         .post('/api/lending/borrow')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '500000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
       expect(response.status).toBe(200);
@@ -108,18 +127,30 @@ describe('Lending Controller', () => {
         error: 'Insufficient collateral',
       });
 
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
-
       const response = await request(app)
         .post('/api/lending/borrow')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '500000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
       expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
+    });
+
+    it('should pass borrow build errors to error handler', async () => {
+      mockStellarService.buildBorrowTransaction = jest.fn().mockRejectedValue(new Error('boom'));
+
+      const response = await request(app)
+        .post('/api/lending/borrow')
+        .send({
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
+          amount: '500000',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
+        });
+
+      expect(response.status).toBe(500);
     });
   });
 
@@ -141,18 +172,30 @@ describe('Lending Controller', () => {
         ledger: 12345,
       });
 
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
-
       const response = await request(app)
         .post('/api/lending/repay')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '250000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+    });
+
+    it('should pass repay build errors to error handler', async () => {
+      mockStellarService.buildRepayTransaction = jest.fn().mockRejectedValue(new Error('boom'));
+
+      const response = await request(app)
+        .post('/api/lending/repay')
+        .send({
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
+          amount: '250000',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
+        });
+
+      expect(response.status).toBe(500);
     });
   });
 
@@ -174,14 +217,12 @@ describe('Lending Controller', () => {
         ledger: 12345,
       });
 
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
-
       const response = await request(app)
         .post('/api/lending/withdraw')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '100000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
       expect(response.status).toBe(200);
@@ -196,18 +237,30 @@ describe('Lending Controller', () => {
         error: 'Withdrawal would violate minimum collateral ratio',
       });
 
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
-
       const response = await request(app)
         .post('/api/lending/withdraw')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '1000000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
       expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
+    });
+
+    it('should pass withdraw build errors to error handler', async () => {
+      mockStellarService.buildWithdrawTransaction = jest.fn().mockRejectedValue(new Error('boom'));
+
+      const response = await request(app)
+        .post('/api/lending/withdraw')
+        .send({
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
+          amount: '100000',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
+        });
+
+      expect(response.status).toBe(500);
     });
   });
 
@@ -217,8 +270,6 @@ describe('Lending Controller', () => {
         horizon: true,
         sorobanRpc: true,
       });
-
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
 
       const response = await request(app).get('/api/health');
 
@@ -234,12 +285,18 @@ describe('Lending Controller', () => {
         sorobanRpc: false,
       });
 
-      (StellarService as jest.Mock).mockImplementation(() => mockStellarService);
-
       const response = await request(app).get('/api/health');
 
       expect(response.status).toBe(503);
       expect(response.body.status).toBe('unhealthy');
+    });
+
+    it('should pass health check errors to error handler', async () => {
+      mockStellarService.healthCheck = jest.fn().mockRejectedValue(new Error('boom'));
+
+      const response = await request(app).get('/api/health');
+
+      expect(response.status).toBe(500);
     });
   });
 });
