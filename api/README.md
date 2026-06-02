@@ -33,10 +33,45 @@ CONTRACT_ID=<your_deployed_contract_id>
 JWT_SECRET=<your_secret_key>
 ```
 
+Circuit breaker tuning (optional, environment variables):
+
+```env
+# Rolling window size in ms used to compute failure rate (default 60000)
+CB_WINDOW_MS=60000
+# Failure rate (fraction) above which the circuit opens (default 0.5)
+CB_FAILURE_THRESHOLD=0.5
+# Minimum number of requests in window before evaluating failure rate (default 5)
+CB_MIN_REQUESTS=5
+# Time to keep circuit OPEN in ms before transitioning to HALF_OPEN (default 30000)
+CB_OPEN_MS=30000
+# Number of successful trial requests in HALF_OPEN to close circuit (default 2)
+CB_HALF_OPEN_TRIAL=2
+```
+
 ## API Endpoints
 
 ### Health Check
 `GET /api/health` - Check service status
+
+The health endpoint now includes Soroban RPC circuit breaker metrics under `services.sorobanBreaker`:
+
+```json
+{
+  "status": "healthy|unhealthy",
+  "timestamp": "...",
+  "services": {
+    "horizon": true,
+    "sorobanRpc": true,
+    "sorobanBreaker": {
+      "state": "CLOSED|OPEN|HALF_OPEN",
+      "windowMs": 60000,
+      "total": 10,
+      "failures": 3,
+      "failureRate": 0.3
+    }
+  }
+}
+```
 
 ### Deposit Collateral
 `POST /api/lending/deposit`

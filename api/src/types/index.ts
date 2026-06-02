@@ -50,6 +50,13 @@ export interface HealthCheckResponse {
   services: {
     horizon: boolean;
     sorobanRpc: boolean;
+    sorobanBreaker?: {
+      state: string;
+      windowMs: number;
+      total: number;
+      failures: number;
+      failureRate: number;
+    };
   };
 }
 

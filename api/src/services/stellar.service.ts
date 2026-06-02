@@ -17,6 +17,7 @@ import { config } from '../config';
 import logger from '../utils/logger';
 import { InternalServerError } from '../utils/errors';
 import { TransactionResponse, TransactionStatus } from '../types';
+import CircuitBreaker from '../utils/circuitBreaker';
 
 export class StellarService {
   private horizonUrl: string;
@@ -24,6 +25,7 @@ export class StellarService {
   private networkPassphrase: string;
   private contractId: string;
   private sorobanServer: SorobanServer;
+  private sorobanBreaker: CircuitBreaker;
 
   constructor() {
     this.horizonUrl = config.stellar.horizonUrl;
@@ -31,6 +33,13 @@ export class StellarService {
     this.networkPassphrase = config.stellar.networkPassphrase;
     this.contractId = config.stellar.contractId;
     this.sorobanServer = new SorobanServer(this.sorobanRpcUrl);
+    this.sorobanBreaker = new CircuitBreaker({
+      windowMs: config.circuitBreaker.windowMs,
+      failureThreshold: config.circuitBreaker.failureThreshold,
+      minRequests: config.circuitBreaker.minRequests,
+      openMs: config.circuitBreaker.openMs,
+      halfOpenMaxTrial: config.circuitBreaker.halfOpenMaxTrial,
+    });
   }
 
   async getAccount(address: string): Promise<Account> {
@@ -93,7 +102,9 @@ export class StellarService {
         .setTimeout(30)
         .build();
 
-      const preparedTx = await this.sorobanServer.prepareTransaction(transaction);
+      const preparedTx = await this.sorobanBreaker.exec(() =>
+        this.sorobanServer.prepareTransaction(transaction)
+      );
       preparedTx.sign(sourceKeypair);
 
       return preparedTx.toXDR();
@@ -131,7 +142,9 @@ export class StellarService {
         .setTimeout(30)
         .build();
 
-      const preparedTx = await this.sorobanServer.prepareTransaction(transaction);
+      const preparedTx = await this.sorobanBreaker.exec(() =>
+        this.sorobanServer.prepareTransaction(transaction)
+      );
       preparedTx.sign(sourceKeypair);
 
       return preparedTx.toXDR();
@@ -169,7 +182,9 @@ export class StellarService {
         .setTimeout(30)
         .build();
 
-      const preparedTx = await this.sorobanServer.prepareTransaction(transaction);
+      const preparedTx = await this.sorobanBreaker.exec(() =>
+        this.sorobanServer.prepareTransaction(transaction)
+      );
       preparedTx.sign(sourceKeypair);
 
       return preparedTx.toXDR();
@@ -207,7 +222,9 @@ export class StellarService {
         .setTimeout(30)
         .build();
 
-      const preparedTx = await this.sorobanServer.prepareTransaction(transaction);
+      const preparedTx = await this.sorobanBreaker.exec(() =>
+        this.sorobanServer.prepareTransaction(transaction)
+      );
       preparedTx.sign(sourceKeypair);
 
       return preparedTx.toXDR();
@@ -273,11 +290,20 @@ export class StellarService {
     }
 
     try {
-      await this.sorobanServer.getHealth();
-      results.sorobanRpc = true;
+      // If circuit is open, treat soroban RPC as unhealthy immediately
+      const breakerState = this.sorobanBreaker.getState();
+      if (breakerState === 'OPEN') {
+        results.sorobanRpc = false;
+      } else {
+        await this.sorobanBreaker.exec(() => this.sorobanServer.getHealth());
+        results.sorobanRpc = true;
+      }
     } catch (error) {
       logger.error('Soroban RPC health check failed:', error);
     }
+
+    // attach breaker metrics for observability
+    (results as any).sorobanBreaker = this.sorobanBreaker.getMetrics();
 
     return results;
   }

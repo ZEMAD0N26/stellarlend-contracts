@@ -31,4 +31,11 @@ export const config = {
     retryInitialDelayMs: parseInt(process.env.RETRY_INITIAL_DELAY_MS || '1000', 10),
     retryMaxDelayMs: parseInt(process.env.RETRY_MAX_DELAY_MS || '10000', 10),
   },
+  circuitBreaker: {
+    windowMs: parseInt(process.env.CB_WINDOW_MS || '60000', 10),
+    failureThreshold: parseFloat(process.env.CB_FAILURE_THRESHOLD || '0.5'),
+    minRequests: parseInt(process.env.CB_MIN_REQUESTS || '5', 10),
+    openMs: parseInt(process.env.CB_OPEN_MS || '30000', 10),
+    halfOpenMaxTrial: parseInt(process.env.CB_HALF_OPEN_TRIAL || '2', 10),
+  },
 };
