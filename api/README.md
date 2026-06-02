@@ -126,6 +126,24 @@ The health endpoint now includes Soroban RPC circuit breaker metrics under `serv
 
 All amounts in stroops (1 XLM = 10,000,000 stroops)
 
+## Request Validation
+
+Lending routes validate request bodies before calling Stellar or Soroban services:
+
+- `userAddress` must be a valid Stellar account or contract address.
+- `assetAddress` is optional, but when provided must be a valid Stellar account or contract address.
+- `amount` must be a base-10 integer string, greater than zero, and within the signed i128 range (`-170141183460469231731687303715884105728` through `170141183460469231731687303715884105727`).
+- `userSecret` is required and must be a non-empty string.
+
+Validation failures return HTTP `400` with the shared error shape:
+
+```json
+{
+  "success": false,
+  "error": "userAddress: Must be a valid Stellar account or contract address"
+}
+```
+
 ## Testing
 
 ```bash

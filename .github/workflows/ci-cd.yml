@@ -94,15 +94,13 @@ jobs:
 
       - name: Generate code coverage
         run: |
-          cd stellar-lend/contracts/hello-world
-          cargo tarpaulin --verbose --out Xml --packages hello-world --exclude-files "**/lending/**" "**/indexing_system/**" --fail-under 88
-          cd ${{ github.workspace }}
-          rm -rf stellar-lend/target/tarpaulin
           cd stellar-lend/contracts/lending
-          cargo tarpaulin --verbose --out Xml --packages stellarlend-lending --exclude-files "**/indexing_system/**"
+          cargo tarpaulin --verbose --out Xml --packages stellarlend-lending --exclude-files "../../indexing_system/*" ../../indexing_system/*
+          cd ../hello-world
+          cargo tarpaulin --verbose --out Xml --fail-under 88
 
       - name: Enforce lending crate coverage threshold
-        run: python3 scripts/enforce_coverage.py stellar-lend/contracts/lending/cobertura.xml --threshold 63.0
+        run: python3 scripts/enforce_coverage.py stellar-lend/contracts/lending/cobertura.xml --threshold 95.0
 
       - name: Install cargo-audit
         run: cargo install cargo-audit

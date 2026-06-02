@@ -79,6 +79,12 @@ This is the contract users, liquidators, and token contracts should treat as aut
 - AMM operation history
 - its own upgrade state
 
+### AMM Initial Liquidity Minting
+
+The `amm` implementation hardens pool initialization against "donation attacks" (where the first depositor inflates the share value to steal from subsequent depositors). On the first deposit (when `total_supply == 0`), the AMM mints `sqrt(amount_0 * amount_1)` shares, but subtracts and permanently locks a `MINIMUM_LIQUIDITY` amount (e.g., 1000 units) to a dead address. This enforces a minimum pool value and makes inflating the LP share price prohibitively expensive.
+
+This invariant is enforced in the `add_liquidity` execution path, which issues the initial `MINIMUM_LIQUIDITY` shares to a dead address before returning the remaining `sqrt(x*y) - MINIMUM_LIQUIDITY` shares to the initial depositor. Subsequent deposits mint shares proportionally using `min(amount_0 * total_supply / reserve_0, amount_1 * total_supply / reserve_1)`.
+
 It does not own lending solvency state, debt balances, or collateral balances.
 
 ### Constant-product invariant

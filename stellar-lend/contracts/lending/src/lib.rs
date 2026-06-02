@@ -1,7 +1,9 @@
 #![no_std]
 
 mod debt;
+pub mod rate_model;
 pub mod rounding_strategy;
+pub mod math;
 
 #[cfg(test)]
 mod interest_drift_regression_test;
@@ -21,6 +23,9 @@ const DEFAULT_DEPOSIT_CAP: i128 = 1_000_000_000_000;
 const HEALTH_FACTOR_SCALE: i128 = 10_000;
 const HEALTH_FACTOR_NO_DEBT: i128 = 100_000_000;
 pub const LIQUIDATION_THRESHOLD_BPS: i128 = 8000;
+const DEFAULT_ORACLE_MAX_AGE_SECS: u64 = 3600;
+const ORACLE_SIGNATURE_DOMAIN: &[u8] = b"StellarLendOracle";
+const BPS_DENOM: i128 = 10_000;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +48,7 @@ pub enum DataKey {
     EmergencyState,
     Guardian,
     PauseState(PauseType),
+    RateParams,
 }
 
 #[contractevent]
@@ -86,8 +92,6 @@ pub struct PauseState {
     pub expires_at_ledger: u32,
 }
 
-/// Labels used by `check_pause_status` to decide which operations are
-/// allowed under each circuit-breaker state.
 pub enum ProtocolAction {
     Deposit,
     Withdraw,
@@ -95,10 +99,6 @@ pub enum ProtocolAction {
     Repay,
     Liquidate,
 }
-
-// ---------------------------------------------------------------------------
-// Error types
-// ---------------------------------------------------------------------------
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -112,9 +112,7 @@ pub enum LendingError {
     DebtCeilingExceeded = 2001,
     DepositCapExceeded = 2002,
     Overflow = 2003,
-    /// Caller is not the admin.
     Unauthorized = 2004,
-    /// Fee outside the permitted range.
     InvalidFeeBps = 2005,
 }
 
@@ -127,10 +125,6 @@ pub enum Error {
     AlreadyInitialized = 1010,
     PositionHealthy = 1011,
 }
-
-// ---------------------------------------------------------------------------
-// Shared view structs
-// ---------------------------------------------------------------------------
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,7 +241,6 @@ impl LendingContract {
             .set(&DataKey::PendingAdmin, &new_admin);
     }
 
-    /// Accept the proposed admin role (proposed admin only).
     pub fn accept_admin(env: Env) {
         let pending_admin: Address = env
             .storage()
@@ -261,37 +254,25 @@ impl LendingContract {
         env.storage().instance().remove(&DataKey::PendingAdmin);
     }
 
-    /// Set the guardian address (admin-only).
-    /// The guardian's sole capability is calling `set_emergency_state(Shutdown)`.
     pub fn set_guardian(env: Env, guardian: Address) {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
         env.storage().instance().set(&DataKey::Guardian, &guardian);
     }
 
-    /// Get the current guardian, if one is set.
     pub fn get_guardian(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::Guardian)
     }
 
-    /// Update the protocol emergency state.
-    ///
-    /// Authorization rules:
-    /// - `Shutdown`  → guardian OR admin
-    /// - `Recovery`  → admin only
-    /// - `Normal`    → admin only
     pub fn set_emergency_state(env: Env, new_state: EmergencyState) {
         let admin = Self::get_admin(env.clone());
 
         match new_state {
             EmergencyState::Shutdown => {
-                // Guardian OR admin may trigger a shutdown.
                 let guardian_opt: Option<Address> =
                     env.storage().instance().get(&DataKey::Guardian);
                 let authorized = match guardian_opt {
                     Some(ref guardian) => {
-                        // Try guardian first; fall back to admin.
-                        // require_auth panics if neither signed.
                         let try_guardian = env.auths().iter().any(|(a, _)| a == guardian);
                         let try_admin = env.auths().iter().any(|(a, _)| a == &admin);
                         if try_guardian {
@@ -305,7 +286,6 @@ impl LendingContract {
                         }
                     }
                     None => {
-                        // No guardian configured — admin only.
                         admin.require_auth();
                         true
                     }
@@ -315,7 +295,6 @@ impl LendingContract {
                 }
             }
             EmergencyState::Recovery | EmergencyState::Normal => {
-                // Only admin may lift an emergency.
                 admin.require_auth();
             }
         }
@@ -329,7 +308,6 @@ impl LendingContract {
         .publish(&env);
     }
 
-    /// Set the minimum borrow amount (admin-only).
     pub fn set_min_borrow(env: Env, min_borrow: i128) -> Result<(), LendingError> {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
@@ -339,7 +317,6 @@ impl LendingContract {
         Ok(())
     }
 
-    /// Get the minimum borrow amount.
     pub fn get_min_borrow(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -347,7 +324,6 @@ impl LendingContract {
             .unwrap_or(0)
     }
 
-    /// Set the flash loan fee in basis points (admin-only, max 1000 bps = 10%).
     pub fn set_flash_fee(env: Env, fee_bps: i128) -> Result<(), LendingError> {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
@@ -367,7 +343,6 @@ impl LendingContract {
             .unwrap_or(5)
     }
 
-    /// Set the protocol-level debt ceiling (admin-only).
     pub fn set_debt_ceiling(env: Env, ceiling: i128) -> Result<(), LendingError> {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
@@ -462,16 +437,6 @@ impl LendingContract {
         Ok(new_balance)
     }
 
-    /// Borrow against deposited collateral. Enforces protocol-level debt ceiling.
-    ///
-    /// # Errors
-    /// * `EmergencyState != Normal` - Borrows blocked during emergency
-    /// * `amount < min_borrow` - Below minimum borrow amount
-    /// * `new_total > debt_ceiling` - Exceeds protocol debt ceiling
-    /// * `Error::Overflow` - Checked arithmetic would overflow
-    ///
-    /// # Returns
-    /// User's debt principal after borrow
     pub fn borrow(env: Env, user: Address, amount: i128) -> Result<i128, LendingError> {
         check_emergency_status(&env, ProtocolAction::Borrow);
         if amount <= 0 {
@@ -486,8 +451,9 @@ impl LendingContract {
         let now = env.ledger().timestamp();
         let position = load_debt(&env, &user);
         let prev_principal = position.principal;
+        let rate = current_borrow_rate(&env);
         let updated =
-            borrow_amount(position, now, amount, DEFAULT_APR_BPS).map_err(|e| match e {
+            borrow_amount(position, now, amount, rate).map_err(|e| match e {
                 debt::DebtError::InvalidAmount => LendingError::InvalidAmount,
                 debt::DebtError::Overflow => LendingError::Overflow,
             })?;
@@ -511,7 +477,6 @@ impl LendingContract {
         Ok(updated.principal)
     }
 
-    /// Liquidate an undercollateralized position.
     pub fn liquidate(
         env: Env,
         liquidator: Address,
@@ -555,8 +520,8 @@ impl LendingContract {
             seized_collateral
         };
 
-        let new_debt = debt - actual_repay;
-        let new_col = collateral - final_seized;
+        let new_debt = debt.saturating_sub(actual_repay);
+        let new_col = collateral.saturating_sub(final_seized);
 
         let now = env.ledger().timestamp();
         let updated_position = DebtPosition {
@@ -569,7 +534,6 @@ impl LendingContract {
         Ok(actual_repay)
     }
 
-    /// Repay user debt, clamping overpayment to zero.
     pub fn repay(env: Env, user: Address, amount: i128) -> Result<i128, LendingError> {
         check_pause_status(&env, ProtocolAction::Repay);
         check_emergency_status(&env, ProtocolAction::Repay);
@@ -590,8 +554,9 @@ impl LendingContract {
         let now = env.ledger().timestamp();
         let position = load_debt(&env, &user);
         let prev_principal = position.principal;
+        let rate = current_borrow_rate(&env);
         let updated =
-            repay_amount(position, now, amount, DEFAULT_APR_BPS).map_err(|e| match e {
+            repay_amount(position, now, amount, rate).map_err(|e| match e {
                 debt::DebtError::InvalidAmount => LendingError::InvalidAmount,
                 debt::DebtError::Overflow => LendingError::Overflow,
             })?;
@@ -719,8 +684,6 @@ impl LendingContract {
         env.storage().persistent().set(&tre_key, &new_tre_bal);
     }
 
-    /// Execute a flash loan: transfer assets to `receiver`, invoke its callback,
-    /// and verify repayment of principal + fee.
     pub fn flash_loan(
         env: Env,
         initiator: Address,
@@ -793,7 +756,8 @@ impl LendingContract {
         if position.principal != 0 {
             extend_debt_ttl(&env, &user);
         }
-        let debt = effective_debt(&position, env.ledger().timestamp(), DEFAULT_APR_BPS)
+        let rate = current_borrow_rate(&env);
+        let debt = effective_debt(&position, env.ledger().timestamp(), rate)
             .unwrap_or(position.principal);
 
         let health_factor = if debt > 0 {
@@ -826,7 +790,8 @@ impl LendingContract {
             extend_debt_ttl(&env, &user);
         }
         let debt = effective_debt(&position, env.ledger().timestamp(), DEFAULT_APR_BPS)
-            .unwrap_or(position.principal);
+            .unwrap_or(position.principal)
+            .max(0);
 
         if debt > 0 {
             col.checked_mul(LIQUIDATION_THRESHOLD_BPS)
@@ -836,7 +801,6 @@ impl LendingContract {
             HEALTH_FACTOR_NO_DEBT
         }
     }
-}
 
 #[allow(dead_code)]
 fn acquire_reentrancy_lock(env: &Env) {
@@ -937,9 +901,56 @@ fn check_emergency_status(env: &Env, action: ProtocolAction) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+fn current_borrow_rate(env: &Env) -> i128 {
+    let params = env
+        .storage()
+        .instance()
+        .get::<DataKey, rate_model::RateParams>(&DataKey::RateParams);
+
+    match params {
+        Some(p) => {
+            let total_debt: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::TotalDebt)
+                .unwrap_or(0);
+            let total_supply: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::TotalDeposits)
+                .unwrap_or(0);
+            let utilization_bps = if total_supply > 0 {
+                total_debt.saturating_mul(10_000) / total_supply
+            } else {
+                0
+            };
+            rate_model::compute_borrow_rate(utilization_bps, &p)
+        }
+        None => DEFAULT_APR_BPS,
+    }
+}
+
+    #[contract]
+    pub struct MockAmm;
+    #[contractimpl]
+    impl MockAmm {
+        pub fn swap(_env: Env, _caller: Address, _in: Address, _out: Address, amount_in: i128, min_out: i128, _dead: u64) -> i128 {
+            let out = amount_in * 2;
+            if out < min_out {
+                panic!("SlippageExceeded");
+            }
+            out
+        }
+    }
+
+    #[contract]
+    pub struct BadAmm;
+    #[contractimpl]
+    impl BadAmm {
+        pub fn swap(_env: Env, _caller: Address, _in: Address, _out: Address, amount_in: i128, _min: i128, _dead: u64) -> i128 {
+            amount_in / 4
+        }
+    }
 
 #[cfg(test)]
 mod test {
@@ -1322,7 +1333,6 @@ mod test {
         assert!(res.is_err(), "deposit should be blocked in Shutdown");
     }
 
-    /// Admin can lift Shutdown back to Normal.
     #[test]
     fn test_admin_lifts_shutdown_to_normal() {
         let (env, client, _admin, _user) = setup();
@@ -1330,17 +1340,11 @@ mod test {
         client.set_guardian(&guardian);
         client.set_emergency_state(&EmergencyState::Shutdown);
         client.set_emergency_state(&EmergencyState::Normal);
-        // Deposits should work again.
         let user = Address::generate(&env);
         let result = client.deposit(&user, &10);
         assert_eq!(result, 10);
     }
 
-    // -----------------------------------------------------------------------
-    // set_emergency_state — unauthenticated / random caller
-    // -----------------------------------------------------------------------
-
-    /// A random address (neither admin nor guardian) cannot set any state.
     #[test]
     #[should_panic(expected = "Unauthorized")]
     fn test_random_caller_cannot_set_emergency_state() {
@@ -1351,7 +1355,6 @@ mod test {
         let attacker = Address::generate(&env2);
         env2.mock_all_auths();
         client2.initialize(&admin2);
-        // Only mock attacker auth.
         env2.mock_auths(&[soroban_sdk::testutils::MockAuth {
             address: &attacker,
             invoke: &soroban_sdk::testutils::MockAuthInvoke {
@@ -1363,10 +1366,6 @@ mod test {
         }]);
         client2.set_emergency_state(&EmergencyState::Shutdown);
     }
-
-    // -----------------------------------------------------------------------
-    // EmergencyState effects on protocol actions
-    // -----------------------------------------------------------------------
 
     #[test]
     #[should_panic(expected = "OperationDisabledDuringShutdown")]
@@ -1419,10 +1418,6 @@ mod test {
         assert_eq!(client.withdraw(&user, &10), 190);
     }
 
-    // -----------------------------------------------------------------------
-    // get_protocol_metrics tests
-    // -----------------------------------------------------------------------
-
     #[test]
     fn test_protocol_metrics_initial_zeros() {
         let (_env, client, _admin, _user) = setup();
@@ -1450,7 +1445,7 @@ mod test {
         let m = client.get_protocol_metrics();
         assert_eq!(m.total_supply, 1000);
         assert_eq!(m.total_borrow, 500);
-        assert_eq!(m.utilization_bps, 5000); // 50%
+        assert_eq!(m.utilization_bps, 5000);
     }
 
     #[test]
@@ -1462,7 +1457,7 @@ mod test {
         let m = client.get_protocol_metrics();
         assert_eq!(m.total_supply, 1000);
         assert_eq!(m.total_borrow, 300);
-        assert_eq!(m.utilization_bps, 3000); // 30%
+        assert_eq!(m.utilization_bps, 3000);
     }
 
     #[test]

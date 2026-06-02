@@ -205,3 +205,24 @@ Strategy: deterministic xorshift64 PRNG, 500 random seeds × 200 ops,
    scenario generation — never in production paths.
 5. **No floating point**: all arithmetic uses integer fixed-point (×10⁶) to match
    Soroban's integer-only environment.
+
+   # Fuzz Testing Guide
+
+## Overview
+
+This project uses `cargo-fuzz` with `libFuzzer` to continuously fuzz the
+pure-math helpers in the lending crate. Fuzzing targets are located in
+`stellar-lend/contracts/lending/fuzz/`.
+
+## Prerequisites
+
+```bash
+# Install nightly Rust toolchain
+rustup install nightly
+
+# Install cargo-fuzz
+cargo install cargo-fuzz
+
+# Verify installation
+cargo +nightly --version
+cargo fuzz --version

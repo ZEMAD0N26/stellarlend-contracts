@@ -1,11 +1,42 @@
 import request from 'supertest';
-import app from '../app';
-import { StellarService } from '../services/stellar.service';
+
+const mockStellarService = {
+  buildDepositTransaction: jest.fn(),
+  submitTransaction: jest.fn(),
+  monitorTransaction: jest.fn(),
+  healthCheck: jest.fn(),
+};
+
+jest.mock('../services/stellar.service', () => ({
+  StellarService: jest.fn(() => mockStellarService),
+}));
+
+const app = require('../app').default;
 
 describe('API Integration Tests', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    mockStellarService.buildDepositTransaction.mockResolvedValue('mock_tx_xdr');
+    mockStellarService.submitTransaction.mockResolvedValue({
+      success: false,
+      status: 'failed',
+      error: 'mock transaction failure',
+    });
+    mockStellarService.monitorTransaction.mockResolvedValue({
+      success: true,
+      status: 'success',
+      transactionHash: 'mock_hash',
+    });
+    mockStellarService.healthCheck.mockResolvedValue({
+      horizon: true,
+      sorobanRpc: true,
+    });
+  });
+
   describe('Complete Lending Flow', () => {
-    const mockUserAddress = 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
-    const mockUserSecret = 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+    const mockUserAddress = 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ';
+    const mockUserSecret = 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I';
     const depositAmount = '10000000'; // 1 XLM
     const borrowAmount = '5000000'; // 0.5 XLM
     const repayAmount = '5500000'; // 0.55 XLM (with interest)
@@ -41,9 +72,9 @@ describe('API Integration Tests', () => {
         request(app)
           .post('/api/lending/deposit')
           .send({
-            userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+            userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
             amount: '1000000',
-            userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+            userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
           })
       );
 
@@ -58,14 +89,14 @@ describe('API Integration Tests', () => {
     it('should handle concurrent deposit requests', async () => {
       const requests = [
         request(app).post('/api/lending/deposit').send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '1000000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         }),
         request(app).post('/api/lending/deposit').send({
-          userAddress: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+          userAddress: 'GD5TFY4DYYF43CQN3UMZUPBBXBLWK3WYAM5PIOMKOVRHBTZF7J7VGHP4',
           amount: '2000000',
-          userSecret: 'SYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         }),
       ];
 
@@ -82,21 +113,22 @@ describe('API Integration Tests', () => {
       const response = await request(app)
         .post('/api/lending/deposit')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
-          amount: '999999999999999999999999999999',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
+          amount: '170141183460469231731687303715884105728',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
         });
 
-      expect([400, 500]).toContain(response.status);
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('signed 128-bit');
     });
 
     it('should handle missing optional fields', async () => {
       const response = await request(app)
         .post('/api/lending/deposit')
         .send({
-          userAddress: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userAddress: 'GBLXVKWHD4QAPFLHMJDXSVB6GFUDLTC46VY42OWHC3TPRN2I6NNV3ZSJ',
           amount: '1000000',
-          userSecret: 'SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+          userSecret: 'SAOS4OGIK6HD4QGR3DVRRDSR4FUBH73FCZGRZ7M53LRN67UQE5JDNS4I',
           // assetAddress is optional
         });
 
