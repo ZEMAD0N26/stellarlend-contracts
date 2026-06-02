@@ -2,6 +2,18 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
+/// Typed storage key namespace for the hello-world contract.
+///
+/// Using a `#[contracttype]` enum ensures unique Soroban XDR encoding for each
+/// storage key and prevents collisions between the admin key and user state keys.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DataKey {
+    Admin,
+    Balance(Address),
+    Debt(Address),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserState {
@@ -16,12 +28,12 @@ pub struct HelloContract;
 impl HelloContract {
     /// Set the admin (one-time).
     pub fn set_admin(env: Env, admin: Address) {
-        env.storage().instance().set(&"admin", &admin);
+        env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
     /// Get the admin (panics if not set).
     pub fn get_admin(env: Env) -> Address {
-        env.storage().instance().get(&"admin").unwrap()
+        env.storage().instance().get(&DataKey::Admin).unwrap()
     }
 
     /// Return a greeting symbol for the given subject.
@@ -33,7 +45,7 @@ impl HelloContract {
     /// Increment the user's deposit balance.
     pub fn deposit(env: Env, user: Address, amount: i128) -> i128 {
         user.require_auth();
-        let key = ("bal", user.clone());
+        let key = DataKey::Balance(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_bal = current + amount;
         env.storage().persistent().set(&key, &new_bal);
@@ -43,7 +55,7 @@ impl HelloContract {
     /// Decrement the user's deposit balance.
     pub fn withdraw(env: Env, user: Address, amount: i128) -> i128 {
         user.require_auth();
-        let key = ("bal", user.clone());
+        let key = DataKey::Balance(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_bal = current - amount;
         env.storage().persistent().set(&key, &new_bal);
@@ -53,7 +65,7 @@ impl HelloContract {
     /// Borrow increases the user's debt.
     pub fn borrow(env: Env, user: Address, amount: i128) -> i128 {
         user.require_auth();
-        let key = ("debt", user.clone());
+        let key = DataKey::Debt(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_debt = current + amount;
         env.storage().persistent().set(&key, &new_debt);
@@ -63,7 +75,7 @@ impl HelloContract {
     /// Repay decreases the user's debt.
     pub fn repay(env: Env, user: Address, amount: i128) -> i128 {
         user.require_auth();
-        let key = ("debt", user.clone());
+        let key = DataKey::Debt(user.clone());
         let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_debt = current - amount;
         env.storage().persistent().set(&key, &new_debt);
@@ -75,12 +87,12 @@ impl HelloContract {
         let balance: i128 = env
             .storage()
             .persistent()
-            .get(&("bal", user.clone()))
+            .get(&DataKey::Balance(user.clone()))
             .unwrap_or(0);
         let debt: i128 = env
             .storage()
             .persistent()
-            .get(&("debt", user.clone()))
+            .get(&DataKey::Debt(user.clone()))
             .unwrap_or(0);
         UserState { balance, debt }
     }
@@ -147,5 +159,22 @@ mod test {
         let s = client.get_state(&user);
         assert_eq!(s.balance, 500);
         assert_eq!(s.debt, 100);
+    }
+
+    #[test]
+    fn test_data_key_variants_are_distinct() {
+        let (env, _client, _admin, user) = setup();
+        let balance_key = DataKey::Balance(user.clone());
+        let debt_key = DataKey::Debt(user.clone());
+
+        env.storage().persistent().set(&balance_key, &123_i128);
+        env.storage().persistent().set(&debt_key, &456_i128);
+
+        let read_balance: Option<i128> = env.storage().persistent().get(&balance_key);
+        let read_debt: Option<i128> = env.storage().persistent().get(&debt_key);
+
+        assert_eq!(read_balance, Some(123));
+        assert_eq!(read_debt, Some(456));
+        assert_ne!(balance_key, debt_key);
     }
 }
