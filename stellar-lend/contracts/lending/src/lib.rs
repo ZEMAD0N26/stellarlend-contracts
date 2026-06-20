@@ -11,6 +11,8 @@ mod deposit_accounting_test;
 mod error_codes_test;
 #[cfg(test)]
 mod interest_drift_regression_test;
+#[cfg(test)]
+mod rounding_drift_test;
 
 use debt::{
     borrow_amount, effective_debt, load_debt, repay_amount, save_debt, DebtPosition,
