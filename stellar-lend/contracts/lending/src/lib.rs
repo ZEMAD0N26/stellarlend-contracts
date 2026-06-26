@@ -1,14 +1,21 @@
 #![no_std]
 
 mod debt;
+mod events;
 pub mod rounding_strategy;
-mod debt;
 
 #[cfg(test)]
 mod interest_drift_regression_test;
 
+#[cfg(test)]
+mod interest_ordering_time_test;
+
+#[cfg(test)]
+mod events_test;
+
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol};
 use debt::{borrow_amount, load_debt, save_debt, DebtPosition, DEFAULT_APR_BPS, repay_amount, effective_debt};
+use events::{emit_borrow, emit_deposit, emit_liquidate, emit_repay, emit_schema_version, emit_withdraw};
 
 /// Maximum desired persistent TTL for position entries, in ledgers.
 /// We bound the extension by the network's `max_ttl` to remain compatible
@@ -114,20 +121,13 @@ pub struct LendingContract;
 #[contractimpl]
 impl LendingContract {
     pub fn initialize(env: Env, admin: Address) {
-<<<<<<< HEAD
-        if env.storage().instance().has(&"admin") {
+        if env.storage().instance().has(&DataKey::Admin) {
             panic!("AlreadyInitialized");
         }
-        env.storage().instance().set(&"admin", &admin);
-        // initialize emergency state to Normal
-        env.storage().instance().set(
-            &Symbol::new(&env, "EmergencyState"),
-            &EmergencyState::Normal,
-        );
-=======
         env.storage().instance().set(&DataKey::Admin, &admin);
         set_emergency_state_internal(&env, EmergencyState::Normal);
->>>>>>> f6bcee0 (feat: complete global emergency circuit breaker and unify instance storage hooks #831)
+        // Emit schema version event for indexers
+        emit_schema_version(&env);
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -193,6 +193,10 @@ impl LendingContract {
         env.storage().persistent().set(&key, &new_balance);
         // Extend TTL to prevent archival of collateral entry
         extend_collateral_ttl(&env, &user);
+        
+        // Emit deposit event
+        emit_deposit(&env, &user, amount, new_balance);
+        
         new_balance
     }
 
@@ -218,6 +222,10 @@ impl LendingContract {
         env.storage().persistent().set(&key, &new_balance);
         // Extend TTL to prevent archival of collateral entry
         extend_collateral_ttl(&env, &user);
+        
+        // Emit withdraw event
+        emit_withdraw(&env, &user, amount, new_balance);
+        
         new_balance
     }
 
@@ -255,6 +263,10 @@ impl LendingContract {
         save_debt(&env, &user, &updated);
         // Extend TTL to prevent archival of debt entry
         extend_debt_ttl(&env, &user);
+        
+        // Emit borrow event
+        emit_borrow(&env, &user, amount, updated.principal);
+        
         Ok(updated.principal)
     }
 
@@ -304,6 +316,17 @@ impl LendingContract {
         env.storage().persistent().set(&debt_key, &new_debt);
         env.storage().persistent().set(&col_key, &new_col);
 
+        // Emit liquidate event
+        emit_liquidate(
+            &env,
+            &liquidator,
+            &borrower,
+            actual_repay,
+            final_seized,
+            new_debt,
+            new_col,
+        );
+
         Ok(actual_repay)
     }
 
@@ -326,6 +349,10 @@ impl LendingContract {
             .map_err(|_| LendingError::Overflow)?;
         save_debt(&env, &user, &updated);
         extend_debt_ttl(&env, &user);
+        
+        // Emit repay event
+        emit_repay(&env, &user, amount, updated.principal);
+        
         updated.principal
     }
 

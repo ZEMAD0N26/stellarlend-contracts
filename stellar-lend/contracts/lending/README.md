@@ -13,6 +13,7 @@ A secure, efficient lending protocol built on Soroban that allows users to borro
 - **Multi-sig Governance**: Secure upgrade mechanism requiring multiple approvals.
 - **Persistent Data Store**: Versatile storage system with backup/restore and migration capabilities.
 - **Arithmetic Safety**: Protection against overflow/underflow using checked arithmetic.
+- **Indexable Events**: Versioned event emission for all core operations (deposit, withdraw, borrow, repay, liquidate) enabling off-chain indexing and monitoring.
 
 ## Building
 
@@ -78,6 +79,57 @@ cargo test
 graph LR
     User[User] -- "Tokens (Deposit/Repay)" --> Contract[Lending Contract]
     Contract -- "Tokens (Borrow/Withdraw)" --> User
+```
+
+## Event Emission
+
+The lending contract emits versioned events for all core fund-moving operations to enable off-chain indexing, monitoring, and analytics.
+
+### Emitted Events
+
+All events carry a `schema_version` field for safe decoding across contract upgrades. Current schema version: `1`
+
+- **SchemaVersionEvent**: Emitted once during `initialize()` to anchor the active schema version for indexers.
+- **DepositEvent**: Emitted when a user deposits collateral. Contains user address, amount deposited, new collateral balance, and timestamp.
+- **WithdrawEvent**: Emitted when a user withdraws collateral. Contains user address, amount withdrawn, new collateral balance, and timestamp.
+- **BorrowEvent**: Emitted when a user borrows against collateral. Contains user address, amount borrowed, new debt principal, and timestamp.
+- **RepayEvent**: Emitted when a user repays debt. Contains user address, amount repaid, new debt principal, and timestamp.
+- **LiquidateEvent**: Emitted when a liquidator liquidates an undercollateralized position. Contains liquidator address, borrower address, repaid debt amount, seized collateral amount, borrower's remaining debt, borrower's remaining collateral, and timestamp.
+
+### Event Guarantees
+
+- Events are emitted **only on successful operations** after state mutations complete.
+- Events **do not expose sensitive data** (e.g., private keys, authentication tokens).
+- Event field order is **stable** within a schema version.
+- Schema version changes follow the **upgrade policy** defined in `docs/EVENT_SCHEMA_VERSIONING.md`.
+
+### Indexer Integration
+
+For detailed guidance on consuming these events in indexers and handling schema migrations, see:
+- [Event Schema Versioning Guide](../../../docs/EVENT_SCHEMA_VERSIONING.md)
+
+Example: Decoding a DepositEvent in TypeScript
+```typescript
+interface DepositEvent {
+  schema_version: number;
+  user: string;
+  amount: bigint;
+  new_balance: bigint;
+  timestamp: number;
+}
+
+function decodeDepositEvent(eventData: any): DepositEvent {
+  if (eventData.schema_version !== 1) {
+    throw new Error(`Unsupported schema version: ${eventData.schema_version}`);
+  }
+  return {
+    schema_version: eventData.schema_version,
+    user: eventData.user,
+    amount: BigInt(eventData.amount),
+    new_balance: BigInt(eventData.new_balance),
+    timestamp: eventData.timestamp
+  };
+}
 ```
 
 ## View Serialization Stability
