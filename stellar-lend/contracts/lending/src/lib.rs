@@ -23,6 +23,8 @@ mod interest_drift_regression_test;
 mod rounding_drift_test;
 #[cfg(test)]
 mod missing_price_test;
+#[cfg(test)]
+mod oracle_max_move_test;
 
 use debt::{
     borrow_amount, effective_debt, load_debt, repay_amount, save_debt, settle_accrual,
@@ -67,6 +69,7 @@ pub enum DataKey {
     PauseState(PauseType),
     RateParams,
     CollateralAsset,
+    MaxMoveBps,
 }
 
 #[contractevent]
@@ -137,6 +140,7 @@ pub enum LendingError {
     StaleOracleTimestamp = 5002,
     OraclePubkeyNotSet = 5003,
     PriceUnavailable = 5004,
+    MaxMoveBpsExceeded = 5005,
 }
 
 #[contracttype]
@@ -226,6 +230,38 @@ impl LendingContract {
         env.crypto()
             .ed25519_verify(&oracle_pubkey, &payload, &signature);
 
+        // Per-update move-cap circuit breaker.
+        // If max_move_bps is configured and a prior price record exists, reject
+        // updates that move the price beyond the configured threshold.
+        if let Some(max_move_bps) = env
+            .storage()
+            .instance()
+            .get::<DataKey, i128>(&DataKey::MaxMoveBps)
+        {
+            if let Some(last) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, PriceRecord>(&DataKey::OraclePrice(asset.clone()))
+            {
+                let last_price = last.price;
+                // delta = |price - last_price| * 10_000 / last_price
+                let delta_abs = if price >= last_price {
+                    price.checked_sub(last_price).ok_or(LendingError::Overflow)?
+                } else {
+                    last_price.checked_sub(price).ok_or(LendingError::Overflow)?
+                };
+                let move_bps = delta_abs
+                    .checked_mul(BPS_DENOM)
+                    .ok_or(LendingError::Overflow)?
+                    .checked_div(last_price)
+                    .ok_or(LendingError::Overflow)?;
+                if move_bps > max_move_bps {
+                    return Err(LendingError::MaxMoveBpsExceeded);
+                }
+            }
+            // No prior record: first-ever price for this asset is exempt.
+        }
+
         env.storage().persistent().set(
             &DataKey::OraclePrice(asset),
             &PriceRecord { price, timestamp },
@@ -235,6 +271,25 @@ impl LendingContract {
 
     pub fn get_price_record(env: Env, asset: Address) -> Option<PriceRecord> {
         env.storage().persistent().get(&DataKey::OraclePrice(asset))
+    }
+
+    /// Set the maximum allowed per-update price move in basis points (admin-only).
+    /// A value of 500 means a single update may move the price by at most 5%.
+    /// Setting to 0 disables the cap. Must be non-negative.
+    pub fn set_max_move_bps(env: Env, max_move_bps: i128) -> Result<(), LendingError> {
+        assert_admin(&env);
+        if max_move_bps < 0 {
+            return Err(LendingError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxMoveBps, &max_move_bps);
+        Ok(())
+    }
+
+    /// Returns the currently configured max-move-bps cap, if any.
+    pub fn get_max_move_bps(env: Env) -> Option<i128> {
+        env.storage().instance().get(&DataKey::MaxMoveBps)
     }
 
     fn oracle_price_signature_payload(
