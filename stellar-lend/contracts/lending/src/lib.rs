@@ -9,6 +9,8 @@ pub mod rounding_strategy;
 #[cfg(test)]
 mod admin_setters_dedupe_test;
 #[cfg(test)]
+mod cross_asset_test;
+#[cfg(test)]
 mod deposit_accounting_test;
 #[cfg(test)]
 mod emergency_state_matrix_test;
@@ -18,8 +20,6 @@ mod error_codes_test;
 mod granular_pause_ops_test;
 #[cfg(test)]
 mod health_factor_edge_test;
-#[cfg(test)]
-mod cross_asset_test;
 #[cfg(test)]
 mod interest_drift_regression_test;
 #[cfg(test)]
@@ -1005,10 +1005,7 @@ impl LendingContract {
     /// Return the aggregate USD-denominated position summary for cross-asset users.
     ///
     /// Returns zeroed values when the user has no cross-asset position.
-    pub fn get_cross_position_summary(
-        env: Env,
-        user: Address,
-    ) -> CrossPositionSummary {
+    pub fn get_cross_position_summary(env: Env, user: Address) -> CrossPositionSummary {
         let total_collateral_usd = cross_asset::get_cross_position_value(&env, &user).unwrap_or(0);
         let total_debt_usd = cross_asset::get_cross_debt_value(&env, &user).unwrap_or(0);
         let health_factor = cross_asset::compute_aggregate_health_factor(&env, &user).unwrap_or(0);

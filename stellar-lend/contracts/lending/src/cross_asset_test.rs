@@ -1,7 +1,15 @@
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
-fn setup() -> (Env, LendingContractClient<'static>, Address, Address, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    LendingContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -17,15 +25,15 @@ fn setup() -> (Env, LendingContractClient<'static>, Address, Address, Address, A
     client.set_asset_params(
         &admin,
         &asset_a,
-        &7500, // 75% LTV
-        &8000, // 80% liquidation threshold
+        &7500,                  // 75% LTV
+        &8000,                  // 80% liquidation threshold
         &1_000_000_000_000i128, // debt ceiling
     );
     client.set_asset_params(
         &admin,
         &asset_b,
-        &6000, // 60% LTV
-        &7000, // 70% liquidation threshold
+        &6000,                  // 60% LTV
+        &7000,                  // 70% liquidation threshold
         &1_000_000_000_000i128, // debt ceiling
     );
 
@@ -64,13 +72,7 @@ fn test_set_asset_params_stores_and_reads() {
 #[test]
 fn test_set_asset_params_rejects_invalid_ltv() {
     let (_env, client, _id, admin, _user, asset_a, _asset_b) = setup();
-    let res = client.try_set_asset_params(
-        &admin,
-        &asset_a,
-        &15000i128,
-        &8000i128,
-        &1_000_000i128,
-    );
+    let res = client.try_set_asset_params(&admin, &asset_a, &15000i128, &8000i128, &1_000_000i128);
     assert!(matches!(res, Err(Ok(LendingError::InvalidAmount))));
 }
 
@@ -89,10 +91,7 @@ fn test_deposit_collateral_asset_increases_balance() {
     let (_env, client, _id, _admin, user, asset_a, _asset_b) = setup();
     let bal = client.deposit_collateral_asset(&user, &asset_a, &1000i128);
     assert_eq!(bal, 1000);
-    assert_eq!(
-        client.get_collateral_asset_balance(&user, &asset_a),
-        1000
-    );
+    assert_eq!(client.get_collateral_asset_balance(&user, &asset_a), 1000);
 }
 
 #[test]
@@ -188,10 +187,7 @@ fn test_withdraw_asset_decreases_balance() {
     client.deposit_collateral_asset(&user, &asset_a, &1000i128);
     let bal = client.withdraw_asset(&user, &asset_a, &400i128);
     assert_eq!(bal, 600);
-    assert_eq!(
-        client.get_collateral_asset_balance(&user, &asset_a),
-        600
-    );
+    assert_eq!(client.get_collateral_asset_balance(&user, &asset_a), 600);
 }
 
 #[test]
@@ -275,7 +271,9 @@ fn test_missing_price_feed_rejects_borrow() {
     let (env, client, id, _admin, user, asset_a, asset_b) = setup();
     client.deposit_collateral_asset(&user, &asset_b, &1i128);
     env.as_contract(&id, || {
-        env.storage().persistent().remove(&DataKey::OraclePrice(asset_b.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OraclePrice(asset_b.clone()));
     });
     // Borrow requires HF computation which needs price for collateral asset_b
     let res = client.try_borrow_asset(&user, &asset_a, &10i128);
@@ -289,7 +287,9 @@ fn test_missing_price_feed_rejects_withdraw() {
     client.deposit_collateral_asset(&user, &asset_a, &100i128);
     client.borrow_asset(&user, &asset_a, &500i128);
     env.as_contract(&id, || {
-        env.storage().persistent().remove(&DataKey::OraclePrice(asset_a.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OraclePrice(asset_a.clone()));
     });
     // Withdraw needs HF computation (has debt) which needs price for asset_a
     let res = client.try_withdraw_asset(&user, &asset_a, &10i128);
@@ -429,10 +429,7 @@ fn test_multi_deposit_same_asset_accumulates() {
     let (_env, client, _id, _admin, user, asset_a, _asset_b) = setup();
     client.deposit_collateral_asset(&user, &asset_a, &100i128);
     client.deposit_collateral_asset(&user, &asset_a, &200i128);
-    assert_eq!(
-        client.get_collateral_asset_balance(&user, &asset_a),
-        300
-    );
+    assert_eq!(client.get_collateral_asset_balance(&user, &asset_a), 300);
 }
 
 #[test]

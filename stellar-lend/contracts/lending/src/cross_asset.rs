@@ -1,9 +1,9 @@
 use soroban_sdk::{Address, Env, Vec};
 
-use crate::debt::{DebtPosition, DEFAULT_APR_BPS, load_debt};
+use crate::debt::{load_debt, DebtPosition, DEFAULT_APR_BPS};
 use crate::{
-    check_emergency_status, check_pause_status,
-    AssetParams, DataKey, LendingError, PriceRecord, ProtocolAction,
+    check_emergency_status, check_pause_status, AssetParams, DataKey, LendingError, PriceRecord,
+    ProtocolAction,
 };
 
 const PRICE_DIVISOR: i128 = 10_000_000;
@@ -50,7 +50,11 @@ pub fn get_price_for_asset(env: &Env, asset: &Address) -> Result<PriceRecord, Le
 
 fn add_to_user_collateral_list(env: &Env, user: &Address, asset: &Address) {
     let key = DataKey::UserCollateralAssets(user.clone());
-    let mut list: Vec<Address> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+    let mut list: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env));
     if !list.contains(asset) {
         list.push_back(asset.clone());
         env.storage().persistent().set(&key, &list);
@@ -59,7 +63,11 @@ fn add_to_user_collateral_list(env: &Env, user: &Address, asset: &Address) {
 
 fn remove_from_user_collateral_list(env: &Env, user: &Address, asset: &Address) {
     let key = DataKey::UserCollateralAssets(user.clone());
-    let mut list: Vec<Address> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+    let mut list: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env));
     if let Some(pos) = list.first_index_of(asset) {
         list.remove(pos);
         env.storage().persistent().set(&key, &list);
@@ -68,7 +76,11 @@ fn remove_from_user_collateral_list(env: &Env, user: &Address, asset: &Address) 
 
 fn add_to_user_debt_list(env: &Env, user: &Address, asset: &Address) {
     let key = DataKey::UserDebtAssets(user.clone());
-    let mut list: Vec<Address> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+    let mut list: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env));
     if !list.contains(asset) {
         list.push_back(asset.clone());
         env.storage().persistent().set(&key, &list);
@@ -77,7 +89,11 @@ fn add_to_user_debt_list(env: &Env, user: &Address, asset: &Address) {
 
 fn remove_from_user_debt_list(env: &Env, user: &Address, asset: &Address) {
     let key = DataKey::UserDebtAssets(user.clone());
-    let mut list: Vec<Address> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+    let mut list: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env));
     if let Some(pos) = list.first_index_of(asset) {
         list.remove(pos);
         env.storage().persistent().set(&key, &list);
@@ -86,12 +102,18 @@ fn remove_from_user_debt_list(env: &Env, user: &Address, asset: &Address) {
 
 fn get_user_collateral_assets(env: &Env, user: &Address) -> Vec<Address> {
     let key = DataKey::UserCollateralAssets(user.clone());
-    env.storage().persistent().get(&key).unwrap_or(Vec::new(env))
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env))
 }
 
 fn get_user_debt_assets(env: &Env, user: &Address) -> Vec<Address> {
     let key = DataKey::UserDebtAssets(user.clone());
-    env.storage().persistent().get(&key).unwrap_or(Vec::new(env))
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env))
 }
 
 fn extend_collateral_asset_ttl(env: &Env, user: &Address, asset: &Address) {
@@ -116,10 +138,7 @@ fn extend_debt_asset_ttl(env: &Env, user: &Address, asset: &Address) {
     }
 }
 
-pub fn compute_aggregate_health_factor(
-    env: &Env,
-    user: &Address,
-) -> Result<i128, LendingError> {
+pub fn compute_aggregate_health_factor(env: &Env, user: &Address) -> Result<i128, LendingError> {
     let collateral_assets = get_user_collateral_assets(env, user);
     let debt_assets = get_user_debt_assets(env, user);
 
@@ -132,8 +151,7 @@ pub fn compute_aggregate_health_factor(
 
     for i in 0..collateral_assets.len() {
         let asset = collateral_assets.get(i).unwrap();
-        let params = load_asset_params(env, &asset)
-            .ok_or(LendingError::AssetNotConfigured)?;
+        let params = load_asset_params(env, &asset).ok_or(LendingError::AssetNotConfigured)?;
         let price_record = get_price_for_asset(env, &asset)?;
         let amount = load_collateral_asset(env, user, &asset);
         if amount == 0 {
@@ -154,12 +172,9 @@ pub fn compute_aggregate_health_factor(
         let asset = debt_assets.get(i).unwrap();
         let price_record = get_price_for_asset(env, &asset)?;
         let position = load_debt_asset(env, user, &asset);
-        let debt = crate::debt::effective_debt(
-            &position,
-            env.ledger().timestamp(),
-            DEFAULT_APR_BPS,
-        )
-        .map_err(|_| LendingError::Overflow)?;
+        let debt =
+            crate::debt::effective_debt(&position, env.ledger().timestamp(), DEFAULT_APR_BPS)
+                .map_err(|_| LendingError::Overflow)?;
         if debt == 0 {
             continue;
         }
@@ -182,10 +197,7 @@ pub fn compute_aggregate_health_factor(
     Ok(health_factor)
 }
 
-pub fn get_cross_position_value(
-    env: &Env,
-    user: &Address,
-) -> Result<i128, LendingError> {
+pub fn get_cross_position_value(env: &Env, user: &Address) -> Result<i128, LendingError> {
     let collateral_assets = get_user_collateral_assets(env, user);
     let mut total_collateral = 0i128;
 
@@ -209,10 +221,7 @@ pub fn get_cross_position_value(
     Ok(total_collateral)
 }
 
-pub fn get_cross_debt_value(
-    env: &Env,
-    user: &Address,
-) -> Result<i128, LendingError> {
+pub fn get_cross_debt_value(env: &Env, user: &Address) -> Result<i128, LendingError> {
     let debt_assets = get_user_debt_assets(env, user);
     let mut total_debt_value = 0i128;
 
@@ -220,12 +229,9 @@ pub fn get_cross_debt_value(
         let asset = debt_assets.get(i).unwrap();
         let price_record = get_price_for_asset(env, &asset)?;
         let position = load_debt_asset(env, user, &asset);
-        let debt = crate::debt::effective_debt(
-            &position,
-            env.ledger().timestamp(),
-            DEFAULT_APR_BPS,
-        )
-        .map_err(|_| LendingError::Overflow)?;
+        let debt =
+            crate::debt::effective_debt(&position, env.ledger().timestamp(), DEFAULT_APR_BPS)
+                .map_err(|_| LendingError::Overflow)?;
         if debt == 0 {
             continue;
         }
@@ -242,15 +248,14 @@ pub fn get_cross_debt_value(
     Ok(total_debt_value)
 }
 
-pub fn validate_asset_params_configured(env: &Env, asset: &Address) -> Result<AssetParams, LendingError> {
+pub fn validate_asset_params_configured(
+    env: &Env,
+    asset: &Address,
+) -> Result<AssetParams, LendingError> {
     load_asset_params(env, asset).ok_or(LendingError::AssetNotConfigured)
 }
 
-pub fn set_asset_params_internal(
-    env: &Env,
-    asset: &Address,
-    params: &AssetParams,
-) {
+pub fn set_asset_params_internal(env: &Env, asset: &Address, params: &AssetParams) {
     let key = DataKey::AssetParams(asset.clone());
     env.storage().instance().set(&key, params);
 }
@@ -359,17 +364,23 @@ pub fn borrow_asset_internal(
     let hf = compute_aggregate_health_factor(env, user)?;
 
     if hf < HEALTH_FACTOR_SCALE {
-        save_debt_asset(env, user, asset, &DebtPosition {
-            principal: prev_principal,
-            last_update: now,
-        });
+        save_debt_asset(
+            env,
+            user,
+            asset,
+            &DebtPosition {
+                principal: prev_principal,
+                last_update: now,
+            },
+        );
         if prev_principal == 0 {
             remove_from_user_debt_list(env, user, asset);
         }
         return Err(LendingError::HealthFactorTooLow);
     }
 
-    let total_debt_for_asset: i128 = env.storage()
+    let total_debt_for_asset: i128 = env
+        .storage()
         .persistent()
         .get(&DataKey::TotalDebtAsset(asset.clone()))
         .unwrap_or(0);
@@ -381,10 +392,15 @@ pub fn borrow_asset_internal(
         .checked_add(delta)
         .ok_or(LendingError::Overflow)?;
     if new_total_debt > params.debt_ceiling {
-        save_debt_asset(env, user, asset, &DebtPosition {
-            principal: prev_principal,
-            last_update: now,
-        });
+        save_debt_asset(
+            env,
+            user,
+            asset,
+            &DebtPosition {
+                principal: prev_principal,
+                last_update: now,
+            },
+        );
         if prev_principal == 0 {
             remove_from_user_debt_list(env, user, asset);
         }
@@ -394,7 +410,8 @@ pub fn borrow_asset_internal(
         .persistent()
         .set(&DataKey::TotalDebtAsset(asset.clone()), &new_total_debt);
 
-    let total_debt_protocol: i128 = env.storage()
+    let total_debt_protocol: i128 = env
+        .storage()
         .persistent()
         .get(&DataKey::TotalDebt)
         .unwrap_or(0);
@@ -440,16 +457,19 @@ pub fn repay_asset_internal(
 
     let repaid = prev_principal.checked_sub(updated.principal).unwrap_or(0);
 
-    let total_debt_asset: i128 = env.storage()
+    let total_debt_asset: i128 = env
+        .storage()
         .persistent()
         .get(&DataKey::TotalDebtAsset(asset.clone()))
         .unwrap_or(0);
     let new_total_debt_asset = total_debt_asset.saturating_sub(repaid);
-    env.storage()
-        .persistent()
-        .set(&DataKey::TotalDebtAsset(asset.clone()), &new_total_debt_asset);
+    env.storage().persistent().set(
+        &DataKey::TotalDebtAsset(asset.clone()),
+        &new_total_debt_asset,
+    );
 
-    let total_debt_protocol: i128 = env.storage()
+    let total_debt_protocol: i128 = env
+        .storage()
         .persistent()
         .get(&DataKey::TotalDebt)
         .unwrap_or(0);
