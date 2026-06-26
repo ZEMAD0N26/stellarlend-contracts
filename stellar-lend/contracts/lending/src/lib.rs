@@ -38,6 +38,9 @@ const DEFAULT_DEPOSIT_CAP: i128 = 1_000_000_000_000;
 const HEALTH_FACTOR_SCALE: i128 = 10_000;
 const HEALTH_FACTOR_NO_DEBT: i128 = 100_000_000;
 pub const LIQUIDATION_THRESHOLD_BPS: i128 = 8000;
+const DEFAULT_LIQUIDATION_THRESHOLD_BPS: i128 = LIQUIDATION_THRESHOLD_BPS;
+const DEFAULT_CLOSE_FACTOR_BPS: i128 = 5000;
+const DEFAULT_LIQUIDATION_INCENTIVE_BPS: i128 = 1000;
 const DEFAULT_ORACLE_MAX_AGE_SECS: u64 = 3600;
 const ORACLE_SIGNATURE_DOMAIN: &[u8] = b"StellarLendOracle";
 const BPS_DENOM: i128 = 10_000;
@@ -64,6 +67,9 @@ pub enum DataKey {
     Guardian,
     PauseState(PauseType),
     RateParams,
+    LiquidationThresholdBps,
+    CloseFactorBps,
+    LiquidationIncentiveBps,
 }
 
 #[contractevent]
@@ -130,6 +136,7 @@ pub enum LendingError {
     DepositCapExceeded = 2002,
     InvalidFeeBps = 2005,
     InsufficientCollateral = 2007,
+    InvalidLiquidationParams = 2010,
     InvalidOracleSignature = 5001,
     StaleOracleTimestamp = 5002,
     OraclePubkeyNotSet = 5003,
@@ -509,9 +516,9 @@ impl LendingContract {
             return Err(LendingError::PositionHealthy);
         }
 
-        const LIQUIDATION_THRESHOLD: i128 = 8000;
+        let threshold_bps = Self::get_liquidation_threshold_bps(&env);
         let hf = collateral
-            .checked_mul(LIQUIDATION_THRESHOLD)
+            .checked_mul(threshold_bps)
             .and_then(|v| v.checked_div(debt))
             .ok_or(LendingError::Overflow)?;
 
@@ -519,9 +526,9 @@ impl LendingContract {
             return Err(LendingError::PositionHealthy);
         }
 
-        const CLOSE_FACTOR: i128 = 5000;
+        let close_factor_bps = Self::get_close_factor_bps(&env);
         let max_repay = debt
-            .checked_mul(CLOSE_FACTOR)
+            .checked_mul(close_factor_bps)
             .and_then(|v| v.checked_div(10000))
             .ok_or(LendingError::Overflow)?;
         let actual_repay = if amount > max_repay {
@@ -530,9 +537,9 @@ impl LendingContract {
             amount
         };
 
-        const INCENTIVE_BPS: i128 = 1000;
+        let incentive_bps = Self::get_liquidation_incentive_bps(&env);
         let seized_collateral = actual_repay
-            .checked_mul(10000 + INCENTIVE_BPS)
+            .checked_mul(10000 + incentive_bps)
             .and_then(|v| v.checked_div(10000))
             .ok_or(LendingError::Overflow)?;
 
@@ -728,7 +735,7 @@ impl LendingContract {
             effective_debt(&position, env.ledger().timestamp(), rate).unwrap_or(position.principal);
 
         let health_factor = if debt > 0 {
-            col.checked_mul(LIQUIDATION_THRESHOLD_BPS)
+            col.checked_mul(Self::get_liquidation_threshold_bps(&env))
                 .map(|v| v / debt)
                 .unwrap_or(i128::MAX)
         } else {
@@ -761,7 +768,7 @@ impl LendingContract {
             .max(0);
 
         if debt > 0 {
-            col.checked_mul(LIQUIDATION_THRESHOLD_BPS)
+            col.checked_mul(Self::get_liquidation_threshold_bps(&env))
                 .map(|v| v / debt)
                 .unwrap_or(i128::MAX)
         } else {
