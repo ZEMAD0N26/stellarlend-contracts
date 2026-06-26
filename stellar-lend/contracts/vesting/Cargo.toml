@@ -3,4 +3,16 @@ name = "stellarlend-vesting"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "stellarlend_vesting"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
 [dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

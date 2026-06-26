@@ -1,8 +1,13 @@
-use std::collections::HashMap;
+#![no_std]
 
-#[derive(Debug, Clone)]
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Env,
+};
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Grant {
-    pub grantee: String,
+    pub grantee: Address,
     pub total: u128,
     pub claimed: u128,
     pub start_seconds: u64,
@@ -13,7 +18,7 @@ pub struct Grant {
 
 impl Grant {
     pub fn vested_at(&self, now: u64) -> u128 {
-        if now < self.start_seconds + self.cliff_seconds {
+        if now < self.start_seconds.saturating_add(self.cliff_seconds) {
             return 0;
         }
         if self.duration_seconds == 0 {
@@ -26,7 +31,7 @@ impl Grant {
         }
         let elapsed = effective - self.start_seconds;
         // linear vesting proportion: total * elapsed / duration
-        (self.total as u128 * elapsed as u128) / self.duration_seconds as u128
+        (self.total * elapsed as u128) / self.duration_seconds as u128
     }
 
     pub fn claimable_at(&self, now: u64) -> u128 {
@@ -42,33 +47,113 @@ impl Grant {
     }
 }
 
-pub struct VestingContract {
-    pub admin: String,
-    pub treasury: String,
-    grants: HashMap<String, Grant>,
-    pub balances: HashMap<String, u128>,
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum VestingError {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    Unauthorized = 3,
+    NoGrantFound = 4,
+    AlreadyRevoked = 5,
+    InvalidParameters = 6,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DataKey {
+    Admin,
+    Treasury,
+    Token,
+    Grant(Address),
+}
+
+const PERSISTENT_TTL_LEDGERS: u32 = 1_000_000;
+
+fn extend_grant_ttl(env: &Env, grantee: &Address) {
+    let key = DataKey::Grant(grantee.clone());
+    let extend_to = env.storage().max_ttl().min(PERSISTENT_TTL_LEDGERS);
+    let threshold = extend_to / 2 + 1;
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, threshold, extend_to);
+    }
+}
+
+#[contract]
+pub struct VestingContract;
+
+#[contractimpl]
 impl VestingContract {
-    pub fn new(admin: &str, treasury: &str) -> Self {
-        Self {
-            admin: admin.to_string(),
-            treasury: treasury.to_string(),
-            grants: HashMap::new(),
-            balances: HashMap::new(),
+    /// Initialize the vesting contract with an admin, a treasury address, and the token to be vested.
+    /// Can only be called once.
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+        token: Address,
+    ) -> Result<(), VestingError> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(VestingError::AlreadyInitialized);
         }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Treasury, &treasury);
+        env.storage().instance().set(&DataKey::Token, &token);
+        Ok(())
     }
 
+    /// Retrieve the admin address of the contract.
+    pub fn get_admin(env: Env) -> Result<Address, VestingError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(VestingError::NotInitialized)
+    }
+
+    /// Retrieve the treasury address of the contract.
+    pub fn get_treasury(env: Env) -> Result<Address, VestingError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Treasury)
+            .ok_or(VestingError::NotInitialized)
+    }
+
+    /// Retrieve the token address used by the contract.
+    pub fn get_token(env: Env) -> Result<Address, VestingError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(VestingError::NotInitialized)
+    }
+
+    /// Add a new vesting grant for a grantee.
+    ///
+    /// Gates on admin authorization. Escrows the tokens by transferring the
+    /// `total` amount from the admin to the contract.
     pub fn add_grant(
-        &mut self,
-        grantee: &str,
+        env: Env,
+        grantee: Address,
         total: u128,
         start_seconds: u64,
         duration_seconds: u64,
         cliff_seconds: u64,
-    ) {
-        let g = Grant {
-            grantee: grantee.to_string(),
+    ) -> Result<(), VestingError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        if total == 0 {
+            return Err(VestingError::InvalidParameters);
+        }
+
+        let token = Self::get_token(env.clone())?;
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        
+        // Transfer tokens from admin to the contract to escrow them.
+        token_client.transfer(&admin, &env.current_contract_address(), &(total as i128));
+
+        let grant = Grant {
+            grantee: grantee.clone(),
             total,
             claimed: 0,
             start_seconds,
@@ -76,115 +161,103 @@ impl VestingContract {
             cliff_seconds,
             revoked: false,
         };
-        self.grants.insert(grantee.to_string(), g);
-        // escrow total in contract balance
-        let bal = self.balances.entry("contract".to_string()).or_default();
-        *bal += total;
+
+        let key = DataKey::Grant(grantee.clone());
+        env.storage().persistent().set(&key, &grant);
+        extend_grant_ttl(&env, &grantee);
+
+        Ok(())
     }
 
-    pub fn claim(&mut self, grantee: &str, now: u64) -> u128 {
-        let g = match self.grants.get_mut(grantee) {
-            Some(x) => x,
-            None => return 0,
-        };
-        let amount = g.claimable_at(now);
+    /// Claim the vested tokens for the caller (grantee).
+    ///
+    /// Gates on grantee authorization. Transfers claimable tokens from the
+    /// contract to the grantee.
+    pub fn claim(env: Env, grantee: Address) -> Result<u128, VestingError> {
+        grantee.require_auth();
+
+        let key = DataKey::Grant(grantee.clone());
+        let mut grant: Grant = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(VestingError::NoGrantFound)?;
+
+        let now = env.ledger().timestamp();
+        let amount = grant.claimable_at(now);
         if amount == 0 {
-            return 0;
+            extend_grant_ttl(&env, &grantee);
+            return Ok(0);
         }
-        g.claimed += amount;
-        // transfer from contract balance to grantee
-        let cbal = self.balances.entry("contract".to_string()).or_default();
-        if *cbal >= amount {
-            *cbal -= amount;
-            let gbal = self.balances.entry(g.grantee.clone()).or_default();
-            *gbal += amount;
-        } else {
-            // insufficient balance; treat as zero transfer
-        }
-        amount
+
+        grant.claimed = grant.claimed.saturating_add(amount);
+        env.storage().persistent().set(&key, &grant);
+        extend_grant_ttl(&env, &grantee);
+
+        let token = Self::get_token(env.clone())?;
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        token_client.transfer(&env.current_contract_address(), &grantee, &(amount as i128));
+
+        Ok(amount)
     }
 
-    pub fn revoke(&mut self, caller: &str, grantee: &str, now: u64) -> Result<u128, String> {
-        if caller != self.admin {
-            return Err("only admin can revoke".to_string());
+    /// Revoke a vesting grant.
+    ///
+    /// Gates on admin authorization. Transferred the unvested tokens back
+    /// to the treasury address. Marks the grant as revoked and reduces the
+    /// total grant amount to the vested amount.
+    pub fn revoke(env: Env, grantee: Address) -> Result<u128, VestingError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        let key = DataKey::Grant(grantee.clone());
+        let mut grant: Grant = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(VestingError::NoGrantFound)?;
+
+        if grant.revoked {
+            return Err(VestingError::AlreadyRevoked);
         }
-        let g = match self.grants.get_mut(grantee) {
-            Some(x) => x,
-            None => return Err("no such grant".to_string()),
-        };
-        if g.revoked {
-            return Err("already revoked".to_string());
-        }
-        let vested = g.vested_at(now);
-        let unvested = if g.total > vested {
-            g.total - vested
+
+        let now = env.ledger().timestamp();
+        let vested = grant.vested_at(now);
+        let unvested = if grant.total > vested {
+            grant.total - vested
         } else {
             0
         };
-        // reduce contract balance and send unvested to treasury
-        let cbal = self.balances.entry("contract".to_string()).or_default();
-        let transfer = if *cbal >= unvested { unvested } else { *cbal };
-        *cbal = cbal.saturating_sub(transfer);
-        let tbal = self.balances.entry(self.treasury.clone()).or_default();
-        *tbal += transfer;
-        // mark revoked and reduce grant total to vested amount
-        g.revoked = true;
-        g.total = vested;
-        Ok(transfer)
+
+        let treasury = Self::get_treasury(env.clone())?;
+        if unvested > 0 {
+            let token = Self::get_token(env.clone())?;
+            let token_client = soroban_sdk::token::Client::new(&env, &token);
+            token_client.transfer(&env.current_contract_address(), &treasury, &(unvested as i128));
+        }
+
+        grant.revoked = true;
+        grant.total = vested;
+
+        env.storage().persistent().set(&key, &grant);
+        extend_grant_ttl(&env, &grantee);
+
+        Ok(unvested)
     }
 
-    // helpers for tests
-    pub fn balance_of(&self, who: &str) -> u128 {
-        *self.balances.get(who).unwrap_or(&0)
+    /// Get a grant for a grantee.
+    pub fn get_grant(env: Env, grantee: Address) -> Result<Grant, VestingError> {
+        let key = DataKey::Grant(grantee.clone());
+        let grant: Grant = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(VestingError::NoGrantFound)?;
+        extend_grant_ttl(&env, &grantee);
+        Ok(grant)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod vesting_contract_test;
 
-    #[test]
-    fn claim_before_cliff_is_zero() {
-        let mut c = VestingContract::new("admin", "treasury");
-        c.add_grant("alice", 1000, 1000, 1000, 200); // start=1000, cliff=200
-                                                     // time before cliff
-        let claimed = c.claim("alice", 1100); // start+100 < start+cliff
-        assert_eq!(claimed, 0);
-        assert_eq!(c.balance_of("alice"), 0);
-    }
-
-    #[test]
-    fn claim_after_cliff_partial() {
-        let mut c = VestingContract::new("admin", "treasury");
-        c.add_grant("bob", 1000, 1000, 1000, 100); // cliff at 1100
-                                                   // at time 1200, elapsed since start = 200, vested = 1000 * 200/1000 = 200
-        let claimed = c.claim("bob", 1200);
-        assert_eq!(claimed, 200);
-        assert_eq!(c.balance_of("bob"), 200);
-    }
-
-    #[test]
-    fn revoke_claws_unvested_to_treasury() {
-        let mut c = VestingContract::new("admin", "treasury");
-        c.add_grant("carol", 1000, 1000, 1000, 100);
-        // at time 1200 vested=200
-        let _ = c.claim("carol", 1200);
-        // contract had 1000, after claim it has 800
-        assert_eq!(c.balance_of("contract"), 800);
-        // revoke by admin at time 1200
-        let transferred = c.revoke("admin", "carol", 1200).expect("revoke failed");
-        // unvested was 800, so treasury should get 800
-        assert_eq!(transferred, 800);
-        assert_eq!(c.balance_of("treasury"), 800);
-        // grantee should only have vested (200) and further claims are zero
-        assert_eq!(c.claim("carol", 1300), 0);
-    }
-
-    #[test]
-    fn revoke_only_admin() {
-        let mut c = VestingContract::new("admin", "treasury");
-        c.add_grant("dan", 500, 0, 100, 0);
-        let res = c.revoke("not-admin", "dan", 10);
-        assert!(res.is_err());
-    }
-}
