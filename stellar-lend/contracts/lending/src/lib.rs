@@ -21,6 +21,8 @@ mod health_factor_edge_test;
 mod interest_drift_regression_test;
 #[cfg(test)]
 mod rounding_drift_test;
+#[cfg(test)]
+mod bad_debt_ledger_test;
 
 use debt::{
     borrow_amount, effective_debt, load_debt, repay_amount, save_debt, settle_accrual,
@@ -29,7 +31,7 @@ use debt::{
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
-    Env, IntoVal, Symbol, Val,
+    Env, IntoVal, Symbol, Val, symbol_short,
 };
 
 const PERSISTENT_TTL_LEDGERS: u32 = 1_000_000;
@@ -51,6 +53,7 @@ pub enum DataKey {
     Treasury(Address),
     TotalDebt,
     TotalDeposits,
+    BadDebt,
     DebtCeiling,
     DepositCap,
     FlashActive,
@@ -174,6 +177,11 @@ impl LendingContract {
 
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DataKey::Admin).unwrap()
+    }
+
+    /// Returns the accumulated protocol bad debt.
+    pub fn get_bad_debt(env: Env) -> i128 {
+        env.storage().persistent().get(&DataKey::BadDebt).unwrap_or(0i128)
     }
 
     /// Set the configured oracle pubkey used to verify signed price updates.
@@ -536,12 +544,28 @@ impl LendingContract {
             .and_then(|v| v.checked_div(10000))
             .ok_or(LendingError::Overflow)?;
 
-        // Ensure we don't seize more than available
-        let final_seized = if seized_collateral > collateral {
-            collateral
-        } else {
-            seized_collateral
-        };
+        let mut final_seized = seized_collateral;
+        if seized_collateral > collateral {
+            let shortfall = seized_collateral
+                .checked_sub(collateral)
+                .ok_or(LendingError::Overflow)?;
+            let current_bad_debt: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::BadDebt)
+                .unwrap_or(0i128);
+            let new_bad_debt = current_bad_debt
+                .checked_add(shortfall)
+                .ok_or(LendingError::Overflow)?;
+            env.storage()
+                .persistent()
+                .set(&DataKey::BadDebt, &new_bad_debt);
+            env.events().publish(
+                (symbol_short!("bad_debt"), borrower.clone()),
+                (shortfall, new_bad_debt),
+            );
+            final_seized = collateral;
+        }
 
         let new_debt = debt.saturating_sub(actual_repay);
         let new_col = collateral.saturating_sub(final_seized);
