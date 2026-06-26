@@ -21,10 +21,12 @@ mod health_factor_edge_test;
 mod interest_drift_regression_test;
 #[cfg(test)]
 mod rounding_drift_test;
+#[cfg(test)]
+mod rate_cache_test;
 
 use debt::{
-    borrow_amount, effective_debt, load_debt, repay_amount, save_debt, settle_accrual,
-    DebtPosition, DEFAULT_APR_BPS,
+    borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,
+    settle_accrual, DebtPosition, DEFAULT_APR_BPS,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -53,6 +55,7 @@ pub enum DataKey {
     TotalDeposits,
     DebtCeiling,
     DepositCap,
+    BorrowRateCache(u32),
     FlashActive,
     FlashFeeBps,
     BorrowMinAmount,
@@ -893,13 +896,6 @@ fn check_emergency_status(env: &Env, action: ProtocolAction) {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RateSnapshot {
-    total_debt: i128,
-    total_supply: i128,
-    params: Option<rate_model::RateParams>,
-}
-
 /// Assert that the transaction signer is the protocol admin.
 /// Panics with the default auth error if not.
 fn assert_admin(env: &Env) {
@@ -924,32 +920,13 @@ fn assert_admin_or_guardian(env: &Env, state: &EmergencyState) {
     }
 }
 
-fn load_rate_snapshot(env: &Env) -> RateSnapshot {
-    let storage = env.storage();
-    let persistent = storage.persistent();
-    let instance = storage.instance();
-
-    RateSnapshot {
-        total_debt: persistent.get(&DataKey::TotalDebt).unwrap_or(0),
-        total_supply: persistent.get(&DataKey::TotalDeposits).unwrap_or(0),
-        params: instance.get(&DataKey::RateParams),
-    }
+#[cfg(test)]
+fn load_rate_snapshot(env: &Env) -> debt::RateSnapshot {
+    debt::load_rate_snapshot(env)
 }
 
 fn current_borrow_rate(env: &Env) -> i128 {
-    let snapshot = load_rate_snapshot(env);
-
-    match snapshot.params {
-        Some(p) => {
-            let utilization_bps = if snapshot.total_supply > 0 {
-                snapshot.total_debt.saturating_mul(10_000) / snapshot.total_supply
-            } else {
-                0
-            };
-            rate_model::compute_borrow_rate(utilization_bps, &p)
-        }
-        None => DEFAULT_APR_BPS,
-    }
+    cached_borrow_rate(env)
 }
 
 #[cfg(test)]
