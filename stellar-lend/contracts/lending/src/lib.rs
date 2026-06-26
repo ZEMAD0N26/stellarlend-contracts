@@ -63,6 +63,8 @@ mod property_invariants_test;
 mod liquidate_event_test;
 #[cfg(test)]
 mod bad_debt_ledger_test;
+#[cfg(test)]
+mod supply_rate_split_test;
 
 use debt::{
     borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,

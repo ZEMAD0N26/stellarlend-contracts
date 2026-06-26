@@ -273,6 +273,88 @@ pub fn compute_supply_rate(
     Ok(supply_rate.min(MAX_RATE_BPS) as u32)
 }
 
+/// Split a gross interest amount into depositor yield and protocol reserve.
+///
+/// Given `total_interest` accrued by a borrower, this function deterministically
+/// partitions it using the reserve factor:
+///
+/// ```text
+/// reserve_cut      = total_interest * reserve_factor_bps / BPS_SCALE
+/// depositor_yield  = total_interest - reserve_cut
+/// ```
+///
+/// The depositor share is computed as the complement (subtraction) rather than
+/// by a second multiplication, so that `depositor_yield + reserve_cut ==
+/// total_interest` exactly — no precision is lost to either side.
+///
+/// # Rounding
+/// Integer division of `total_interest * reserve_factor_bps / BPS_SCALE` floors
+/// toward zero, meaning any fractional unit falls to the **depositor** side.
+/// This is the conservative choice: the protocol never takes more than its
+/// exact share.
+///
+/// # Arguments
+/// * `total_interest` - Gross interest accrued by the borrower (≥ 0)
+/// * `reserve_factor_bps` - Fraction of interest kept by the protocol,
+///   expressed in basis points (0 = none, 10_000 = 100%)
+///
+/// # Returns
+/// * `Ok((depositor_yield, reserve_cut))` where both values are ≥ 0 and their
+///   sum equals `total_interest`
+/// * `Err(MathError::OutOfRange)` if either input is negative or
+///   `reserve_factor_bps > BPS_SCALE`
+/// * `Err(MathError::Overflow)` if the intermediate multiplication overflows
+///
+/// # Examples (basis-point arithmetic)
+///
+/// ```text
+/// // 10% reserve factor on 1_000 interest
+/// split_interest_by_reserve_factor(1_000, 1_000)
+///   => Ok((900, 100))   // 10% to reserve, 90% to depositors
+///
+/// // 0% reserve factor — all interest goes to depositors
+/// split_interest_by_reserve_factor(1_000, 0)
+///   => Ok((1_000, 0))
+///
+/// // 100% reserve factor — all interest goes to the protocol
+/// split_interest_by_reserve_factor(1_000, 10_000)
+///   => Ok((0, 1_000))
+/// ```
+pub fn split_interest_by_reserve_factor(
+    total_interest: i128,
+    reserve_factor_bps: u32,
+) -> Result<(i128, i128), MathError> {
+    if total_interest < 0 {
+        return Err(MathError::OutOfRange);
+    }
+    if reserve_factor_bps > BPS_SCALE {
+        return Err(MathError::OutOfRange);
+    }
+    if total_interest == 0 {
+        return Ok((0, 0));
+    }
+
+    let scale = BPS_SCALE as i128;
+    let reserve_bps = reserve_factor_bps as i128;
+
+    // reserve_cut = floor(total_interest * reserve_factor_bps / BPS_SCALE)
+    // Integer division floors toward zero, so any fractional unit stays with
+    // the depositor — the protocol never takes more than its exact share.
+    let reserve_cut = total_interest
+        .checked_mul(reserve_bps)
+        .ok_or(MathError::Overflow)?
+        .checked_div(scale)
+        .ok_or(MathError::DivisionByZero)?;
+
+    // Complement: depositor_yield = total_interest - reserve_cut
+    // This guarantees depositor_yield + reserve_cut == total_interest exactly.
+    let depositor_yield = total_interest
+        .checked_sub(reserve_cut)
+        .ok_or(MathError::NegativeResult)?;
+
+    Ok((depositor_yield, reserve_cut))
+}
+
 /// Compute liquidation bonus for a position
 ///
 /// Formula: bonus = debt_to_cover * liquidation_bonus_bps / BPS_SCALE
@@ -592,5 +674,85 @@ mod tests {
             checked_mul_div_ceil(i128::MAX, 1, 1).unwrap(),
             i128::MAX
         );
+    }
+
+    // ── split_interest_by_reserve_factor ─────────────────────────────────────
+
+    #[test]
+    fn test_split_zero_reserve_factor_all_to_depositors() {
+        let (depositor, reserve) = split_interest_by_reserve_factor(1_000, 0).unwrap();
+        assert_eq!(depositor, 1_000);
+        assert_eq!(reserve, 0);
+    }
+
+    #[test]
+    fn test_split_full_reserve_factor_all_to_protocol() {
+        let (depositor, reserve) = split_interest_by_reserve_factor(1_000, 10_000).unwrap();
+        assert_eq!(depositor, 0);
+        assert_eq!(reserve, 1_000);
+    }
+
+    #[test]
+    fn test_split_10pct_reserve_factor() {
+        // 10% reserve factor: 1_000 * 1_000 / 10_000 = 100 to reserve, 900 to depositors
+        let (depositor, reserve) = split_interest_by_reserve_factor(1_000, 1_000).unwrap();
+        assert_eq!(reserve, 100);
+        assert_eq!(depositor, 900);
+        assert_eq!(depositor + reserve, 1_000);
+    }
+
+    #[test]
+    fn test_split_20pct_reserve_factor() {
+        // 20% reserve: 500 * 2_000 / 10_000 = 100 to reserve, 400 to depositors
+        let (depositor, reserve) = split_interest_by_reserve_factor(500, 2_000).unwrap();
+        assert_eq!(reserve, 100);
+        assert_eq!(depositor, 400);
+        assert_eq!(depositor + reserve, 500);
+    }
+
+    #[test]
+    fn test_split_sum_always_equals_total_interest() {
+        // Exhaustively verify the no-leakage invariant across several values
+        for total in [0i128, 1, 7, 100, 999, 10_000, 1_000_000] {
+            for rf_bps in [0u32, 1, 500, 1_000, 2_000, 5_000, 9_999, 10_000] {
+                let (d, r) = split_interest_by_reserve_factor(total, rf_bps).unwrap();
+                assert_eq!(
+                    d + r,
+                    total,
+                    "sum mismatch: total={total} rf={rf_bps} => depositor={d} reserve={r}"
+                );
+                assert!(d >= 0 && r >= 0, "negative split for total={total} rf={rf_bps}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_depositor_never_less_than_floor_rounding() {
+        // When total_interest * reserve_factor_bps is not exactly divisible by BPS_SCALE,
+        // the fractional unit falls to the depositor (floor division of reserve_cut).
+        // Example: 1 * 5_000 / 10_000 = 0 (integer floor) => depositor gets 1, reserve 0.
+        let (depositor, reserve) = split_interest_by_reserve_factor(1, 5_000).unwrap();
+        // 1 * 5000 / 10000 = 0 (floor), so reserve_cut = 0, depositor_yield = 1
+        assert_eq!(reserve, 0);
+        assert_eq!(depositor, 1);
+    }
+
+    #[test]
+    fn test_split_zero_interest_returns_zeros() {
+        let (d, r) = split_interest_by_reserve_factor(0, 2_000).unwrap();
+        assert_eq!(d, 0);
+        assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn test_split_rejects_negative_interest() {
+        let result = split_interest_by_reserve_factor(-1, 1_000);
+        assert_eq!(result, Err(MathError::OutOfRange));
+    }
+
+    #[test]
+    fn test_split_rejects_reserve_factor_above_100pct() {
+        let result = split_interest_by_reserve_factor(1_000, 10_001);
+        assert_eq!(result, Err(MathError::OutOfRange));
     }
 }
