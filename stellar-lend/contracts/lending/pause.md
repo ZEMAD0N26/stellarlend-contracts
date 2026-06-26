@@ -8,7 +8,7 @@ situations or maintenance windows.
 - **Granular Control**: Pause specific operations (`Deposit`, `Borrow`, `Repay`, `Withdraw`,
   `Liquidation`) without affecting others.
 - **Global Pause**: A master switch (`All`) that immediately halts every operation.
-- **Admin Managed**: Only the protocol admin can toggle individual pause flags.
+- **Admin & Guardian Managed**: The admin or guardian can toggle individual pause flags.
 - **Guardian Trigger**: A configured guardian (e.g., a security multisig) can trigger emergency
   shutdown without waiting for full governance latency.
 - **Recovery Mode**: After a shutdown the admin can move the protocol into a controlled unwind mode
@@ -23,7 +23,7 @@ situations or maintenance windows.
 ## Auto-Expiry Lifecycle
 
 - Each granular pause is stored as a struct with `paused: bool` and `expires_at_ledger: u32`.
-- A pause is considered active only while `env.ledger().sequence() <= expires_at_ledger`.
+- A pause is considered active only while `env.ledger().sequence() < expires_at_ledger`.
 - When ledger sequence exceeds `expires_at_ledger`, the paused operation is treated as unpaused
   without any storage rewrite.
 - Operators should either explicitly extend an active pause with `extend_pause(operation, new_expiry)`
@@ -146,12 +146,25 @@ Both `flash_loan` and `repay_flash_loan` are gated behind `check_pause_status` a
 
 ### Admin Functions
 
-#### `set_pause(admin: Address, operation: PauseType, paused: bool, expires_at_ledger: u32) -> Result<(), LendingError>`
+#### `set_pause(pause_type: PauseType, paused: bool, ttl_ledgers: u32)`
 
-Toggles the pause state for a specific operation or the entire protocol.
+Sets or clears a granular pause flag with a time-to-live expressed in ledger count.
 
-- **Requires Authorization**: Yes (by `admin`).
-- **Emits**: `PauseStateChangedEvent`.
+- **Parameters**:
+  - `pause_type` — The `PauseType` variant to pause or unpause (e.g. `Deposit`, `Borrow`, `All`).
+  - `paused` — `true` to activate the pause, `false` to clear it. Setting `paused = false` is a
+    valid unpause call regardless of TTL.
+  - `ttl_ledgers` — Number of ledgers from the current sequence until the pause expires. The
+    contract computes `expires_at_ledger = env.ledger().sequence() + ttl_ledgers` internally.
+- **TTL Semantics**:
+  - `ttl_ledgers = 0` means the pause expires immediately (at the current ledger sequence). Since
+    `pause_is_active` checks `ledger < expires_at_ledger`, a TTL of 0 means `pause_is_active`
+    returns `false` right away.
+  - `ttl_ledgers = N` means the pause remains active for the next `N` ledgers (including the
+    current one), then auto-expires.
+- **Authorization**: Admin or guardian (mirrors `set_emergency_state` Shutdown auth — if a guardian
+  is configured, the guardian is the expected caller; otherwise admin is required).
+- **Emits**: `PauseStateChangedEvent` with `old_state` and `new_state`.
 
 #### `extend_pause(admin: Address, operation: PauseType, new_expiry: u32) -> Result<(), LendingError>`
 
@@ -291,8 +304,8 @@ global `All` flag are inactive. Deposit, borrow, and liquidation remain blocked 
 1. **Admin Trust**: The admin should be a multisig or DAO-governed address to avoid single-key
    centralization risk. Compromise of the admin key allows arbitrary pause/unpause.
 
-2. **Guardian Scope**: The guardian can only trigger `emergency_shutdown`. It cannot set individual
-   pause flags, rotate itself, or invoke recovery — those paths require the admin key. Configure the
+2. **Guardian Scope**: The guardian can trigger `emergency_shutdown` and call `set_pause`. It
+   cannot rotate itself or invoke recovery — those paths require the admin key. Configure the
    guardian as a lower-latency security multisig.
 
 3. **Persistence**: All pause and emergency states are stored in persistent storage so they survive
@@ -321,15 +334,20 @@ global `All` flag are inactive. Deposit, borrow, and liquidation remain blocked 
 ## Usage Examples (Rust SDK)
 
 ```rust
-// Pause borrowing in an emergency
-let expires_at_ledger = env.ledger().sequence() + 100;
-client.set_pause(&admin, &PauseType::Borrow, &true, &expires_at_ledger);
+// Pause borrowing for 100 ledgers
+client.set_pause(&PauseType::Borrow, &true, &100u32);
 
-// Re-enable borrowing
-client.set_pause(&admin, &PauseType::Borrow, &false, &expires_at_ledger);
+// Re-enable borrowing (paused=false is an unpause)
+client.set_pause(&PauseType::Borrow, &false, &0u32);
 
 // Query pause state before presenting UI options
 let borrow_paused = client.get_pause_state(&PauseType::Borrow);
+
+// Global pause for 500 ledgers
+client.set_pause(&PauseType::All, &true, &500u32);
+
+// Pause with immediate expiry (ttl=0 means pause_is_active returns false)
+client.set_pause(&PauseType::Deposit, &true, &0u32);
 
 // Configure a guardian (e.g., security multisig)
 client.set_guardian(&admin, &security_multisig);

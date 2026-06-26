@@ -105,6 +105,8 @@ The table below reflects the **shipping** surface of `src/lib.rs` as of this bra
 | `upgrade_status` / `current_version` / `current_wasm_hash` | view | — | Query upgrade proposal state and active version/hash. |
 | `set_flash_fee` | `(env, fee_bps: i128) → Result<(), LendingError>` | admin | Sets the flash-loan fee in the inclusive range `[0, 1000]` bps. |
 | `set_emergency_state` | `(env, new_state: EmergencyState)` | admin or guardian | Transitions between `Normal`, `Shutdown`, and `Recovery`. Emits `EmergencyStateChanged` event. |
+| `set_pause` | `(env, pause_type: PauseType, paused: bool, ttl_ledgers: u32)` | admin or guardian | Sets or clears a granular pause flag. `ttl_ledgers` is added to the current ledger to compute expiry. `ttl_ledgers = 0` means the pause expires immediately. `paused = false` is a valid unpause. Emits `PauseStateChangedEvent`. |
+| `get_pause_state` | `(env, pause_type: PauseType) → bool` | — | Returns `true` if the operation is paused (own flag or `All` override). |
 
 ### Emergency State Machine
 
@@ -158,7 +160,6 @@ The functions listed below appear in older documentation but are **not yet imple
 | Function | Notes |
 |---|---|
 | `set_oracle(env, admin, oracle)` | External oracle contract adapter; signed `set_oracle_pubkey` / `set_price` flow is implemented today. |
-| `set_pause(env, admin, pause_type, paused)` | Granular per-operation pausing (currently only global via `set_emergency_state`). |
 | `set_liquidation_threshold_bps(env, admin, bps)` | Configurable liquidation threshold (currently hardcoded at 8000 BPS). |
 | `set_close_factor_bps(env, admin, bps)` | Configurable close factor (currently hardcoded at 5000 BPS). |
 | `get_collateral_value(env, user)` | USD-denominated collateral value (requires oracle). |
@@ -186,7 +187,7 @@ graph LR
 
 ### Authorization & Access Control
 - **Admin**: Manages risk parameters, emergency state, and admin handoff.
-- **Guardian**: Optionally stored at `DataKey::Guardian`; falls back to admin if not set. Authorized to call `set_emergency_state`.
+- **Guardian**: Optionally stored at `DataKey::Guardian`; falls back to admin if not set. Authorized to call `set_emergency_state` and `set_pause`.
 - **User**: `deposit`, `withdraw`, `borrow`, `repay` each call `user.require_auth()`.
 - **Liquidator**: `liquidate` calls `liquidator.require_auth()`.
 

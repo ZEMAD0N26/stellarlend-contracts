@@ -442,23 +442,22 @@ impl LendingContract {
         .publish(&env);
     }
 
-    /// Set or clear a granular pause flag.
+    /// Set or clear a granular pause flag with a TTL.
+    ///
+    /// `ttl_ledgers` is added to the current ledger sequence to compute
+    /// `expires_at_ledger`. A `ttl_ledgers` of 0 means the pause expires
+    /// immediately (at the current sequence), so `pause_is_active` returns
+    /// false right away. Setting `paused = false` is a valid unpause call
+    /// that clears the active pause regardless of TTL.
     ///
     /// Core user operations check granular/global pause state before emergency
     /// state so an active pause can also stop recovery-allowed unwind paths.
-    pub fn set_pause(
-        env: Env,
-        admin: Address,
-        operation: PauseType,
-        paused: bool,
-        expires_at_ledger: u32,
-    ) -> Result<(), LendingError> {
-        admin.require_auth();
-        if admin != Self::get_admin(env.clone()) {
-            return Err(LendingError::Unauthorized);
-        }
+    pub fn set_pause(env: Env, pause_type: PauseType, paused: bool, ttl_ledgers: u32) {
+        assert_admin_or_guardian(&env, &EmergencyState::Shutdown);
 
-        let key = DataKey::PauseState(operation);
+        let expires_at_ledger = env.ledger().sequence().saturating_add(ttl_ledgers);
+
+        let key = DataKey::PauseState(pause_type);
         let old_state = env.storage().instance().get(&key).unwrap_or(PauseState {
             paused: false,
             expires_at_ledger: 0,
@@ -469,12 +468,11 @@ impl LendingContract {
         };
         env.storage().instance().set(&key, &new_state);
         PauseStateChangedEvent {
-            operation,
+            operation: pause_type,
             old_state,
             new_state,
         }
         .publish(&env);
-        Ok(())
     }
 
     /// Return true if a specific operation is currently paused.
@@ -1285,7 +1283,7 @@ fn pause_is_active(env: &Env, operation: PauseType) -> bool {
     env.storage()
         .instance()
         .get(&key)
-        .map(|state: PauseState| state.paused && env.ledger().sequence() <= state.expires_at_ledger)
+        .map(|state: PauseState| state.paused && env.ledger().sequence() < state.expires_at_ledger)
         .unwrap_or(false)
 }
 
