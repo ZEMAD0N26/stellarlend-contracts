@@ -513,11 +513,21 @@ liquidation risk throughout.
 
 Monitor both events to detect oracle health issues in production.
 
+### Collateral Asset Configuration
+
+To support multi-asset operations or require price availability checks on specific assets:
+- **`set_collateral_asset(env, asset)`**: Admin-only method to configure the address of the asset used as collateral.
+- **`get_collateral_asset(env)`**: Returns the configured collateral asset address, if any.
+
+If a collateral asset is configured, both `borrow` and `liquidate` operations (and view functions like `get_position` and `get_health_factor`) require a valid on-chain `OraclePrice` record to value the collateral. If the price record is absent or cannot be loaded, the contract rejects the transaction with a `PriceUnavailable (5004)` error code.
+
 ### New files added
 
 | File                   | Location                                      |
 |------------------------|-----------------------------------------------|
 | `amm_twap.rs`          | `stellar-lend/contracts/hello-world/src/`     |
 | `twap_tests.rs`        | `stellar-lend/contracts/hello-world/src/`     |
+| `missing_price_test.rs` | `stellar-lend/contracts/lending/src/`         |
 | Modified: `amm.rs`     | `stellar-lend/contracts/hello-world/src/`     |
 | Modified: `oracle.rs`  | `stellar-lend/contracts/hello-world/src/`     |
+| Modified: `lib.rs`      | `stellar-lend/contracts/lending/src/`         |
