@@ -450,6 +450,7 @@ mod interest_ordering_time_tests {
         // Create initial debt position
         let initial_position = DebtPosition {
             principal: 10_000,
+            borrow_index_snapshot: crate::debt::INDEX_SCALE,
             last_update: 1000,
         };
 
@@ -483,6 +484,7 @@ mod interest_ordering_time_tests {
         // Initial position (no debt)
         let initial = DebtPosition {
             principal: 0,
+            borrow_index_snapshot: crate::debt::INDEX_SCALE,
             last_update: 1000,
         };
 

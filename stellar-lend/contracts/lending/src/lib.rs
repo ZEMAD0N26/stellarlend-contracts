@@ -21,10 +21,13 @@ mod health_factor_edge_test;
 mod interest_drift_regression_test;
 #[cfg(test)]
 mod rounding_drift_test;
+#[cfg(test)]
+mod borrow_index_test;
 
 use debt::{
-    borrow_amount, effective_debt, load_debt, repay_amount, save_debt, settle_accrual,
-    DebtPosition, DEFAULT_APR_BPS,
+    borrow_amount_indexed, compute_debt, effective_debt, load_borrow_index, load_debt,
+    repay_amount_indexed, save_debt, settle_position, touch_borrow_index,
+    DebtPosition, DEFAULT_APR_BPS, INDEX_SCALE,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -64,6 +67,14 @@ pub enum DataKey {
     Guardian,
     PauseState(PauseType),
     RateParams,
+    /// Monotonically-increasing global borrow index, scaled to `INDEX_SCALE`
+    /// (10^7).  Initialised to `INDEX_SCALE` at deployment.
+    BorrowIndex,
+    /// Ledger timestamp of the last `BorrowIndex` update.
+    LastIndexUpdate,
+    /// List of all borrower addresses — used exclusively by `migrate_positions`
+    /// to iterate over existing debt records.
+    BorrowerList,
 }
 
 #[contractevent]
@@ -79,6 +90,18 @@ pub struct PauseStateChangedEvent {
     pub operation: PauseType,
     pub old_state: PauseState,
     pub new_state: PauseState,
+}
+
+/// Emitted when `migrate_positions` completes.
+///
+/// `index_used` is the `BorrowIndex` value written into every migrated
+/// position snapshot. `positions_migrated` is the count of records that were
+/// updated (zero if all positions already had valid snapshots).
+#[contractevent]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MigrationCompleteEvent {
+    pub index_used: i128,
+    pub positions_migrated: u32,
 }
 
 #[contracttype]
@@ -170,10 +193,91 @@ impl LendingContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         set_emergency_state_internal(&env, EmergencyState::Normal);
+        // Seed global borrow index at 1.0 (INDEX_SCALE).
+        debt::save_borrow_index(&env, INDEX_SCALE);
+        debt::save_last_index_update(&env, env.ledger().timestamp());
+        // Initialise an empty borrower list for migration support.
+        let empty: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+        env.storage()
+            .instance()
+            .set(&DataKey::BorrowerList, &empty);
     }
 
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DataKey::Admin).unwrap()
+    }
+
+    /// Return the current global borrow index without modifying state.
+    ///
+    /// The index starts at `INDEX_SCALE` (10^7) at deployment and grows
+    /// monotonically as interest accrues.
+    pub fn get_borrow_index(env: Env) -> i128 {
+        load_borrow_index(&env)
+    }
+
+    /// Read-only view: compute the current debt for `user` using the stored
+    /// global index without modifying any state.
+    pub fn compute_debt_view(env: Env, user: Address) -> i128 {
+        let position = load_debt(&env, &user);
+        let current_index = load_borrow_index(&env);
+        compute_debt(&position, current_index)
+    }
+
+    /// Migrate all pre-index `DebtPosition` records so that each has a valid
+    /// `borrow_index_snapshot`.
+    ///
+    /// This is the upgrade entry-point.  It must be called once after
+    /// deploying the new contract version, before users interact.
+    ///
+    /// Algorithm:
+    /// 1. Require admin authorisation.
+    /// 2. Advance the global index to `now` (so all migrations share the
+    ///    same baseline index).
+    /// 3. Iterate the `BorrowerList`; for every position whose snapshot is
+    ///    zero, write the current index and emit no per-position events.
+    /// 4. Emit `MigrationCompleteEvent` with the index used and count.
+    ///
+    /// If called a second time, positions already have non-zero snapshots
+    /// and the function returns 0 (no writes performed).
+    pub fn migrate_positions(env: Env) -> u32 {
+        assert_admin(&env);
+        let now = env.ledger().timestamp();
+        let rate = current_borrow_rate(&env);
+        // Step 1: advance the global index so all migrated snapshots share
+        // the current post-upgrade baseline.
+        let current_index = touch_borrow_index(&env, now, rate);
+
+        let borrower_list: soroban_sdk::Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::BorrowerList)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        let mut migrated: u32 = 0;
+
+        for i in 0..borrower_list.len() {
+            let user = borrower_list.get(i).unwrap();
+            let key = DataKey::Debt(user.clone());
+            if let Some(mut pos) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, DebtPosition>(&key)
+            {
+                if pos.borrow_index_snapshot == 0 {
+                    pos.borrow_index_snapshot = current_index;
+                    env.storage().persistent().set(&key, &pos);
+                    migrated += 1;
+                }
+            }
+        }
+
+        MigrationCompleteEvent {
+            index_used: current_index,
+            positions_migrated: migrated,
+        }
+        .publish(&env);
+
+        migrated
     }
 
     /// Set the configured oracle pubkey used to verify signed price updates.
@@ -457,15 +561,25 @@ impl LendingContract {
         }
 
         let now = env.ledger().timestamp();
-        let position = load_debt(&env, &user);
-        let prev_principal = position.principal;
         let rate = current_borrow_rate(&env);
-        let updated = borrow_amount(position, now, amount, rate).map_err(|e| match e {
-            debt::DebtError::InvalidAmount => LendingError::InvalidAmount,
-            debt::DebtError::Overflow => LendingError::Overflow,
-        })?;
+        // Advance the global borrow index before touching the position.
+        let current_index = touch_borrow_index(&env, now, rate);
+
+        let position = load_debt(&env, &user);
+        let prev_principal = compute_debt(&position, current_index);
+
+        let updated = borrow_amount_indexed(&position, current_index, now, amount).map_err(
+            |e| match e {
+                debt::DebtError::InvalidAmount => LendingError::InvalidAmount,
+                debt::DebtError::Overflow => LendingError::Overflow,
+                debt::DebtError::IndexInvariantViolated => LendingError::Overflow,
+            },
+        )?;
+        // Register borrower for migration support (idempotent append).
+        register_borrower(&env, &user);
         save_debt(&env, &user, &updated);
-        // Track protocol-level total debt
+
+        // Track protocol-level total debt.
         let total_debt: i128 = env
             .storage()
             .persistent()
@@ -496,11 +610,15 @@ impl LendingContract {
         let collateral: i128 = env.storage().persistent().get(&col_key).unwrap_or(0);
         let position = load_debt(&env, &borrower);
         let now = env.ledger().timestamp();
-        // Settle the borrower's debt once and reuse the settled principal for
-        // the health-factor check, close-factor cap, and final debt write.
+        let rate = current_borrow_rate(&env);
+        // Advance the global borrow index before reading debt.
+        let current_index = touch_borrow_index(&env, now, rate);
+
+        // Settle the borrower's debt using the index ratio.
         let settled_position =
-            settle_accrual(&position, now, DEFAULT_APR_BPS).unwrap_or(DebtPosition {
+            settle_position(&position, current_index, now).unwrap_or(DebtPosition {
                 principal: position.principal,
+                borrow_index_snapshot: current_index,
                 last_update: now,
             });
         let debt = settled_position.principal;
@@ -536,7 +654,7 @@ impl LendingContract {
             .and_then(|v| v.checked_div(10000))
             .ok_or(LendingError::Overflow)?;
 
-        // Ensure we don't seize more than available
+        // Ensure we don't seize more than available.
         let final_seized = if seized_collateral > collateral {
             collateral
         } else {
@@ -548,6 +666,7 @@ impl LendingContract {
 
         let updated_position = DebtPosition {
             principal: new_debt,
+            borrow_index_snapshot: current_index,
             last_update: settled_position.last_update,
         };
         save_debt(&env, &borrower, &updated_position);
@@ -574,21 +693,31 @@ impl LendingContract {
         }
         user.require_auth();
         let now = env.ledger().timestamp();
-        let position = load_debt(&env, &user);
-        let prev_principal = position.principal;
         let rate = current_borrow_rate(&env);
-        let updated = repay_amount(position, now, amount, rate).map_err(|e| match e {
-            debt::DebtError::InvalidAmount => LendingError::InvalidAmount,
-            debt::DebtError::Overflow => LendingError::Overflow,
-        })?;
+        // Advance the global borrow index before touching the position.
+        let current_index = touch_borrow_index(&env, now, rate);
+
+        let position = load_debt(&env, &user);
+        let prev_principal = compute_debt(&position, current_index);
+
+        let updated = repay_amount_indexed(&position, current_index, now, amount).map_err(
+            |e| match e {
+                debt::DebtError::InvalidAmount => LendingError::InvalidAmount,
+                debt::DebtError::Overflow => LendingError::Overflow,
+                debt::DebtError::IndexInvariantViolated => LendingError::Overflow,
+            },
+        )?;
         save_debt(&env, &user, &updated);
-        // Track protocol-level total debt
+
+        // Track protocol-level total debt.
         let total_debt: i128 = env
             .storage()
             .persistent()
             .get(&DataKey::TotalDebt)
             .unwrap_or(0);
-        let repaid = prev_principal.checked_sub(updated.principal).unwrap_or(0);
+        let repaid = prev_principal
+            .checked_sub(updated.principal)
+            .unwrap_or(0);
         let new_total_debt = total_debt.saturating_sub(repaid);
         env.storage()
             .persistent()
@@ -842,6 +971,29 @@ fn extend_debt_ttl(env: &Env, user: &Address) {
             .persistent()
             .extend_ttl(&key, threshold, extend_to);
     }
+}
+
+/// Append `user` to the `BorrowerList` stored in instance storage, if not
+/// already present.  This list is used by `migrate_positions` to iterate
+/// over all debt records.
+fn register_borrower(env: &Env, user: &Address) {
+    let mut list: soroban_sdk::Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::BorrowerList)
+        .unwrap_or_else(|| soroban_sdk::vec![env]);
+
+    // Linear scan is acceptable: the list is bounded by the number of unique
+    // borrowers and is read/written only on borrow (not every tx).
+    for i in 0..list.len() {
+        if list.get(i).unwrap() == *user {
+            return; // already registered
+        }
+    }
+    list.push_back(user.clone());
+    env.storage()
+        .instance()
+        .set(&DataKey::BorrowerList, &list);
 }
 
 fn pause_is_active(env: &Env, operation: PauseType) -> bool {
