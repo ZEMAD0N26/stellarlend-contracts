@@ -42,6 +42,8 @@ mod liquidate_close_factor_test;
 #[cfg(test)]
 mod oracle_staleness_test;
 #[cfg(test)]
+mod liquidate_rounding_test;
+#[cfg(test)]
 mod rounding_drift_test;
 #[cfg(test)]
 mod rate_cache_test;
@@ -653,6 +655,23 @@ impl LendingContract {
     /// Uses checks-effects-interactions ordering: storage is updated after
     /// validation and before token transfers so any transfer failure reverts
     /// the whole liquidation atomically.
+    ///
+    /// Anyone may call `liquidate` on a position whose health factor is below
+    /// the liquidation threshold (`< 1.0`).  The caller repays up to 50 % of
+    /// the borrower's debt and receives an equivalent amount of the borrower's
+    /// collateral plus a 10 % liquidation incentive.  The incentive is minted
+    /// from the borrower's collateral, not from the protocol.
+    ///
+    /// # Rounding policy (all divisions favour protocol solvency)
+    ///
+    /// | Division                     | Rounding | Rationale |
+    /// |------------------------------|----------|-----------|
+    /// | `hf = col × THRESHOLD ÷ debt` | floor    | Lower HF → position looks more underwater → earlier liquidation |
+    /// | `max_repay = debt × 5000 ÷ 10000` | floor | Smaller cap → less debt extinguished per call → more rounds remain |
+    /// | `seized = repay × 11000 ÷ 10000`  | floor | Liquidator receives *less* collateral than the exact 10 % bonus |
+    ///
+    /// All three use [`math::checked_mul_div_floor`] so every truncation
+    /// transfers the sub-unit remainder to the protocol / remaining borrowers.
     pub fn liquidate(
         env: Env,
         liquidator: Address,
@@ -695,34 +714,47 @@ impl LendingContract {
             return Err(LendingError::PositionHealthy);
         }
 
+        // Health-factor computation: floor rounding.
+        // collateral * 8000 / debt — rounding down makes HF slightly lower,
+        // making the position look *more* underwater than it really is,
+        // which is conservative (triggers liquidation slightly earlier).
         const LIQUIDATION_THRESHOLD: i128 = 8000;
-        let hf = collateral
-            .checked_mul(LIQUIDATION_THRESHOLD)
-            .and_then(|v| v.checked_div(debt))
-            .ok_or(LendingError::Overflow)?;
+        let hf = math::checked_mul_div_floor(collateral, LIQUIDATION_THRESHOLD, debt)
+            .map_err(|_| LendingError::Overflow)?;
 
         if hf >= 10000 {
             return Err(LendingError::PositionHealthy);
         }
 
+        // Close-factor cap: floor rounding.
+        // debt * 5000 / 10000 — rounding down means the liquidator can extinguish
+        // *at most* 50 % of debt, and possibly slightly less.  This is conservative:
+        // the protocol retains more liquidation opportunities.
         const CLOSE_FACTOR: i128 = 5000;
-        let max_repay = debt
-            .checked_mul(CLOSE_FACTOR)
-            .and_then(|v| v.checked_div(10000))
-            .ok_or(LendingError::Overflow)?;
+        let max_repay = math::checked_mul_div_floor(debt, CLOSE_FACTOR, BPS_DENOM)
+            .map_err(|_| LendingError::Overflow)?;
         let actual_repay = if amount > max_repay {
             max_repay
         } else {
             amount
         };
 
-        const INCENTIVE_BPS: i128 = 1000;
-        let seized_collateral = actual_repay
-            .checked_mul(10000 + INCENTIVE_BPS)
-            .and_then(|v| v.checked_div(10000))
-            .ok_or(LendingError::Overflow)?;
+        // Dust guard: a repay of 0 would make the liquidation a no-op.
+        if actual_repay <= 0 {
+            return Err(LendingError::InvalidAmount);
+        }
 
-        // Ensure we don't seize more than available
+        // Liquidation incentive: floor rounding.
+        // actual_repay * 11000 / 10000 — rounding down means the liquidator
+        // receives *less* collateral than the exact 10 % bonus.  The sub-unit
+        // remainder stays with the borrower (or protocol), preventing value
+        // extraction via repeated dust-sized liquidations.
+        const INCENTIVE_BPS: i128 = 1000;
+        let seized_collateral =
+            math::checked_mul_div_floor(actual_repay, BPS_DENOM + INCENTIVE_BPS, BPS_DENOM)
+                .map_err(|_| LendingError::Overflow)?;
+
+        // Clamp: never seize more than the borrower's available collateral.
         let final_seized = if seized_collateral > collateral {
             collateral
         } else {

@@ -131,6 +131,35 @@ The `debt.rs` module (interest accrual, principal mutations) follows the same ch
 - `repay_amount()`: `checked_sub` for repayment
 - All return `Result<_, DebtError::Overflow>` on arithmetic failure
 
+## Liquidation Rounding Policy
+
+All three divisions in the `liquidate` path use **floor rounding** (truncation
+toward zero for positive inputs) so that every sub-unit remainder favours
+protocol solvency over the liquidator:
+
+| Division | Rounding | Effect |
+|---|---|---|
+| `hf = collateral × 8000 ÷ debt` | floor | Lower HF → position appears more underwater → liquidation triggered sooner |
+| `max_repay = debt × 5000 ÷ 10000` | floor | Smaller close-factor cap → less debt extinguished per liquidation → more rounds remain |
+| `seized = repay × 11000 ÷ 10000` | floor | Liquidator receives *less* collateral than the exact 10 % bonus → remainder stays with borrower/protocol |
+
+These are enforced via `math::checked_mul_div_floor`, which uses
+`checked_mul` + `checked_div` with explicit floor semantics.  A companion
+`math::checked_mul_div_ceil` exists for non-liquidation paths that need the
+opposite direction, but it is **never** used in `liquidate`.
+
+### Dust attack mitigation
+
+A liquidator who repeatedly triggers small (dust) liquidations
+can never accumulate a net positive due to rounding, because every truncation
+transfers value *away* from the liquidator.  Concretely:
+
+- If `seized_collateral` would be 1.1, the liquidator receives 1 and the 0.1
+  stays with the borrower.
+- If `max_repay` would be 0.5, the cap rounds to 0 (and the liquidation is
+  rejected via the `actual_repay <= 0` dust guard), preventing a no-op call
+  from wasting gas.
+
 ### Audit Checklist
 
 - ✅ All core flows (deposit, withdraw, borrow, repay) use checked arithmetic

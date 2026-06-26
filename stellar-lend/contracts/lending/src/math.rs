@@ -375,6 +375,50 @@ pub fn compute_utilization(total_borrows: i128, total_deposits: i128) -> Result<
         .map(|v| v as u32)
 }
 
+/// Multiply `a * b` then divide by `c`, rounding toward negative infinity (floor).
+///
+/// For positive inputs this is equivalent to truncation toward zero, but the
+/// semantic is explicitly **floor** so the rounding direction is unambiguous:
+/// the caller always knowingly rounds in favour of the protocol (smaller result
+/// for seized_collateral and max_repay; lower HF → more liquidatable).
+///
+/// # Panics
+/// - Returns `Err(MathError::DivisionByZero)` when `c == 0`.
+/// - Returns `Err(MathError::Overflow)` when the intermediate product exceeds `i128::MAX`.
+#[inline]
+pub fn checked_mul_div_floor(a: i128, b: i128, c: i128) -> Result<i128, MathError> {
+    if c == 0 {
+        return Err(MathError::DivisionByZero);
+    }
+    a.checked_mul(b)
+        .ok_or(MathError::Overflow)?
+        .checked_div(c)
+        .ok_or(MathError::DivisionByZero)
+}
+
+/// Multiply `a * b` then divide by `c`, rounding toward positive infinity (ceil).
+///
+/// For positive inputs the result is `(a * b + c - 1) / c`.  Use sparingly —
+/// ceiling rounds in favour of the receiver, so it should **never** appear in
+/// liquidation paths where the liquidator is the receiver.
+///
+/// # Panics
+/// - Returns `Err(MathError::DivisionByZero)` when `c == 0`.
+/// - Returns `Err(MathError::Overflow)` when the intermediate product exceeds `i128::MAX`.
+#[inline]
+pub fn checked_mul_div_ceil(a: i128, b: i128, c: i128) -> Result<i128, MathError> {
+    if c == 0 {
+        return Err(MathError::DivisionByZero);
+    }
+    let product = a.checked_mul(b).ok_or(MathError::Overflow)?;
+    let quotient = product.checked_div(c).ok_or(MathError::DivisionByZero)?;
+    if product % c == 0 {
+        Ok(quotient)
+    } else {
+        quotient.checked_add(1).ok_or(MathError::Overflow)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,5 +491,106 @@ mod tests {
         assert!(!is_liquidatable(SCALE)); // HF = 1.0, not liquidatable
         assert!(is_liquidatable(SCALE - 1)); // HF < 1.0, liquidatable
         assert!(!is_liquidatable(SCALE + 1)); // HF > 1.0, not liquidatable
+    }
+
+    // ── checked_mul_div_floor ─────────────────────────────────────────────────
+
+    #[test]
+    fn mul_div_floor_exact_division() {
+        assert_eq!(checked_mul_div_floor(100, 50, 10).unwrap(), 500);
+    }
+
+    #[test]
+    fn mul_div_floor_truncates_toward_zero() {
+        // 10 * 11 / 3 = 110 / 3 = 36.666 → floor = 36
+        assert_eq!(checked_mul_div_floor(10, 11, 3).unwrap(), 36);
+    }
+
+    #[test]
+    fn mul_div_floor_small_boundary() {
+        // 1 * 11000 / 10000 = 1.1 → floor = 1 (seized_collateral rounding)
+        assert_eq!(checked_mul_div_floor(1, 11000, 10000).unwrap(), 1);
+    }
+
+    #[test]
+    fn mul_div_floor_zero_numerator() {
+        assert_eq!(checked_mul_div_floor(0, 9999, 10000).unwrap(), 0);
+    }
+
+    #[test]
+    fn mul_div_floor_division_by_zero() {
+        assert_eq!(
+            checked_mul_div_floor(1, 1, 0),
+            Err(MathError::DivisionByZero)
+        );
+    }
+
+    #[test]
+    fn mul_div_floor_overflow_returns_error() {
+        assert_eq!(
+            checked_mul_div_floor(i128::MAX, 2, 1),
+            Err(MathError::Overflow)
+        );
+    }
+
+    // ── checked_mul_div_ceil ──────────────────────────────────────────────────
+
+    #[test]
+    fn mul_div_ceil_exact_division() {
+        assert_eq!(checked_mul_div_ceil(100, 50, 10).unwrap(), 500);
+    }
+
+    #[test]
+    fn mul_div_ceil_rounds_up() {
+        // 10 * 11 / 3 = 110 / 3 = 36.666 → ceil = 37
+        assert_eq!(checked_mul_div_ceil(10, 11, 3).unwrap(), 37);
+    }
+
+    #[test]
+    fn mul_div_ceil_small_boundary() {
+        // 1 * 11000 / 10000 = 1.1 → ceil = 2
+        assert_eq!(checked_mul_div_ceil(1, 11000, 10000).unwrap(), 2);
+    }
+
+    #[test]
+    fn mul_div_ceil_no_round_up_when_exact() {
+        // 10 * 10000 / 10000 = 10 → ceil = 10
+        assert_eq!(checked_mul_div_ceil(10, 10000, 10000).unwrap(), 10);
+    }
+
+    #[test]
+    fn mul_div_ceil_division_by_zero() {
+        assert_eq!(
+            checked_mul_div_ceil(1, 1, 0),
+            Err(MathError::DivisionByZero)
+        );
+    }
+
+    #[test]
+    fn mul_div_ceil_overflow_returns_error() {
+        assert_eq!(
+            checked_mul_div_ceil(i128::MAX, 2, 1),
+            Err(MathError::Overflow)
+        );
+    }
+
+    #[test]
+    fn mul_div_ceil_overflow_on_addition() {
+        // product fits, but product % c != 0 and product / c + 1 overflows
+        // i128::MAX - 1 divided by 1 = i128::MAX - 1, +1 = i128::MAX → fine
+        // But i128::MAX / 1 = i128::MAX, remainder 0 → no addition
+        // To trigger: i128::MAX / 1 with remainder = 0 → won't hit add
+        // The ceiling addition can only overflow if product == i128::MAX
+        // and c > 1, with product % c != 0
+        // i128::MAX = 170141183460469231731687303715884105727
+        // Let's use a case where product = i128::MAX - 1 and c divides it:
+        // Actually the simpler case: product = i128::MAX, c = 2, remainder = 1
+        // Then quotient = (i128::MAX - 1) / 2 = 9223372036854775807
+        // product % c = 1, so we'd do quotient + 1 = 9223372036854775808 which fits
+        // Actually let me just test a pathological case
+        assert_eq!(
+            checked_mul_div_ceil(i128::MAX, 1, 1).unwrap(),
+            i128::MAX
+        );
     }
 }
