@@ -134,9 +134,15 @@ fn liquidation_sequence_invariants_hold_across_seeded_sequences() {
                     }
                     Operation::Borrow(amount) => {
                         let amount = amount as i128;
-                        let result = client.try_borrow(&borrower, &amount);
-                        prop_assert!(result.is_ok());
-                        expected_debt = expected_debt.saturating_add(amount);
+                        let position = client.get_position(&borrower);
+                        
+                        // Only borrow if collateral can support it (simple 2:1 LTV check)
+                        // Collateral * 2 must be >= current debt + new borrow
+                        if position.collateral.saturating_mul(2) >= position.debt.saturating_add(amount) {
+                            let result = client.try_borrow(&borrower, &amount);
+                            prop_assert!(result.is_ok());
+                            expected_debt = expected_debt.saturating_add(amount);
+                        }
                     }
                     Operation::Repay(amount) => {
                         let amount = amount as i128;

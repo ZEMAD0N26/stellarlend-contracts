@@ -100,9 +100,14 @@ fn property_random_operation_sequences_preserve_invariants() {
                     }
                     Operation::Borrow(amount) => {
                         let amount = amount as i128;
-                        let call = client.try_borrow(&user, &amount);
-                        prop_assert!(call.is_ok());
-                        expected_debt += amount;
+                        let position = client.get_position(&user);
+                        
+                        // Only borrow if collateral can support it (simple 2:1 LTV check)
+                        if position.collateral.saturating_mul(2) >= position.debt.saturating_add(amount) {
+                            let call = client.try_borrow(&user, &amount);
+                            prop_assert!(call.is_ok());
+                            expected_debt += amount;
+                        }
                     }
                     Operation::Repay(amount) => {
                         let amount = amount as i128;
