@@ -1093,6 +1093,8 @@ impl LendingContract {
             return Err(LendingError::SelfLiquidation);
         }
 
+        check_pause_status(&env, ProtocolAction::Liquidate);
+        check_emergency_status(&env, ProtocolAction::Liquidate);
         require_fresh_valuation_prices(&env)?;
 
         let active: bool = env
@@ -2075,7 +2077,7 @@ fn check_emergency_status(env: &Env, action: ProtocolAction) {
         EmergencyState::Normal => {}
         EmergencyState::Shutdown => panic!("OperationDisabledDuringShutdown"),
         EmergencyState::Recovery => match action {
-            ProtocolAction::Repay | ProtocolAction::Withdraw => {}
+            ProtocolAction::Repay | ProtocolAction::Withdraw | ProtocolAction::Liquidate => {},
             _ => panic!("ActionBlockedInRecovery"),
         },
     }
