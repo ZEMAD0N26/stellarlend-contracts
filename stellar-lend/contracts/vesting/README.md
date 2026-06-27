@@ -14,4 +14,6 @@ Key behavior:
 
 `total_locked()` is maintained incrementally during `add_grant`, `claim`, and `revoke`; it is not recomputed by scanning all stored schedules.
 
-See unit tests in `src/lib.rs` and `src/vesting_views_test.rs` for expected behavior and examples.
+See unit tests in `src/lib.rs`, `src/vesting_views_test.rs`, and `src/vesting_doc_example_test.rs` for expected behavior and examples.
+
+For the full schedule math, cliff semantics, and revoke split with a worked example, see [`VESTING_MATH.md`](./VESTING_MATH.md).
