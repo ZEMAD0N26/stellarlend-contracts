@@ -138,8 +138,9 @@ mod tests {
         
         // Because of the locked minimum liquidity (total_supply = 1001 instead of 1),
         // the victim still receives a proportional amount of shares.
-        // shares = min(500,000 * 1001 / 1,001,001, ...) = 500
-        assert_eq!(victim_shares, 500);
+        // shares = min(500,000 * 1001 / 1,001,001, ...) = 499
+        // floor(500_500_000 / 1_001_001) = 499
+        assert_eq!(victim_shares, 499);
         assert_eq!(new_locked, 0);
         
         // If MINIMUM_LIQUIDITY was 0, total_supply would be 1, reserve_0 would be 1_000_001.

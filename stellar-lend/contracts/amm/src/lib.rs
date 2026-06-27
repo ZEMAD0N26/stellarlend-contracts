@@ -7,6 +7,8 @@ pub mod liquidity_math;
 mod sqrt_precision_test;
 #[cfg(test)]
 mod flash_swap_test;
+#[cfg(test)]
+mod mint_shares_proptest;
 
 use soroban_sdk::{contract, contractimpl, Address, Bytes, Env};
 
