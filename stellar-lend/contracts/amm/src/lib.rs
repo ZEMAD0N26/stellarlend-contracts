@@ -104,6 +104,9 @@ fn assert_k_monotonic(before_a: i128, before_b: i128, after_a: i128, after_b: i1
 // Tests: fuzz-style sweeping of reserves and swap amounts
 // ---------------------------------------------------------------------------
 #[cfg(test)]
+mod swap_bounds_proptest;
+
+#[cfg(test)]
 mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
