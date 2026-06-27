@@ -14,11 +14,11 @@ mod admin_setters_dedupe_test;
 #[cfg(test)]
 mod bad_debt_ledger_test;
 #[cfg(test)]
-mod cross_asset_e2e_test;
-#[cfg(test)]
 mod bad_debt_write_off_test;
 #[cfg(test)]
 mod borrow_health_factor_test;
+#[cfg(test)]
+mod cross_asset_e2e_test;
 #[cfg(test)]
 mod cross_asset_test;
 #[cfg(test)]
@@ -38,25 +38,27 @@ mod granular_pause_ops_test;
 #[cfg(test)]
 mod health_factor_edge_test;
 #[cfg(test)]
-mod liquidation_sequence_invariant_test;
-#[cfg(test)]
 mod interest_drift_regression_test;
 #[cfg(test)]
 mod isolation_mode_test;
 #[cfg(test)]
-mod liquidate_checked_sub_test;
-#[cfg(test)]
 mod liquidate_accrual_test;
+#[cfg(test)]
+mod liquidate_checked_sub_test;
 #[cfg(test)]
 mod liquidate_close_factor_test;
 #[cfg(test)]
 mod liquidate_event_test;
+#[cfg(test)]
+mod liquidate_perf_test;
 #[cfg(test)]
 mod liquidate_rounding_test;
 #[cfg(test)]
 mod liquidate_transfer_test;
 #[cfg(test)]
 mod liquidation_bonus_proptest;
+#[cfg(test)]
+mod liquidation_sequence_invariant_test;
 #[cfg(test)]
 mod oracle_payload_binding_test;
 #[cfg(test)]
@@ -77,8 +79,6 @@ mod rounding_drift_test;
 mod self_liquidation_test;
 #[cfg(test)]
 mod supply_rate_split_test;
-#[cfg(test)]
-mod liquidate_perf_test;
 
 use debt::{
     borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,
@@ -459,8 +459,14 @@ impl LendingContract {
             return Err(LendingError::InvalidAmount);
         }
         // Retrieve optional bounds
-        let min_opt: Option<i128> = env.storage().persistent().get(&DataKey::PriceMin(asset.clone()));
-        let max_opt: Option<i128> = env.storage().persistent().get(&DataKey::PriceMax(asset.clone()));
+        let min_opt: Option<i128> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceMin(asset.clone()));
+        let max_opt: Option<i128> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceMax(asset.clone()));
         if let Some(min) = min_opt {
             if price < min {
                 return Err(LendingError::PriceOutOfBounds);
@@ -504,9 +510,13 @@ impl LendingContract {
                 let last_price = last.price;
                 // delta = |price - last_price| * 10_000 / last_price
                 let delta_abs = if price >= last_price {
-                    price.checked_sub(last_price).ok_or(LendingError::Overflow)?
+                    price
+                        .checked_sub(last_price)
+                        .ok_or(LendingError::Overflow)?
                 } else {
-                    last_price.checked_sub(price).ok_or(LendingError::Overflow)?
+                    last_price
+                        .checked_sub(price)
+                        .ok_or(LendingError::Overflow)?
                 };
                 let move_bps = delta_abs
                     .checked_mul(BPS_DENOM)
@@ -605,15 +615,27 @@ impl LendingContract {
         if min_price <= 0 || max_price <= 0 || min_price >= max_price {
             return Err(LendingError::InvalidAmount);
         }
-        env.storage().persistent().set(&DataKey::PriceMin(asset.clone()), &min_price);
-        env.storage().persistent().set(&DataKey::PriceMax(asset.clone()), &max_price);
-        PriceBoundsSetEvent { asset, min_price, max_price }.publish(&env);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PriceMin(asset.clone()), &min_price);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PriceMax(asset.clone()), &max_price);
+        PriceBoundsSetEvent {
+            asset,
+            min_price,
+            max_price,
+        }
+        .publish(&env);
         Ok(())
     }
 
     /// Retrieve price bounds for an asset. Returns `(Option<min>, Option<max>)`.
     pub fn get_price_bounds(env: Env, asset: Address) -> (Option<i128>, Option<i128>) {
-        let min = env.storage().persistent().get(&DataKey::PriceMin(asset.clone()));
+        let min = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceMin(asset.clone()));
         let max = env.storage().persistent().get(&DataKey::PriceMax(asset));
         (min, max)
     }
@@ -892,9 +914,7 @@ impl LendingContract {
 
     /// Get the configured collateral asset.
     pub fn get_collateral_asset(env: Env) -> Option<Address> {
-        env.storage()
-            .instance()
-            .get(&DataKey::CollateralAsset)
+        env.storage().instance().get(&DataKey::CollateralAsset)
     }
 
     /// Borrow assets after pause and emergency gates pass.
@@ -1156,7 +1176,6 @@ impl LendingContract {
             .map_err(|_| LendingError::Overflow)?;
         save_debt(&env, &borrower, &settled_position);
 
-
         let debt = settled_position.principal;
 
         if debt == 0 {
@@ -1229,10 +1248,8 @@ impl LendingContract {
                     .persistent()
                     .set(&DataKey::BadDebt, &new_bad_debt);
                 #[allow(deprecated)]
-                env.events().publish(
-                    (Symbol::new(&env, "bad_debt"), borrower.clone()),
-                    residual,
-                );
+                env.events()
+                    .publish((Symbol::new(&env, "bad_debt"), borrower.clone()), residual);
             }
             available_collateral
         } else {
@@ -2054,7 +2071,9 @@ pub(crate) fn settle_and_accrue_insurance(
                     .instance()
                     .get(&DataKey::InsuranceFund)
                     .unwrap_or(0);
-                let new_fund = current_fund.checked_add(share).ok_or(LendingError::Overflow)?;
+                let new_fund = current_fund
+                    .checked_add(share)
+                    .ok_or(LendingError::Overflow)?;
                 env.storage()
                     .instance()
                     .set(&DataKey::InsuranceFund, &new_fund);
@@ -2062,8 +2081,8 @@ pub(crate) fn settle_and_accrue_insurance(
         }
     }
 
-    let settled = debt::settle_accrual(position, now, rate_bps)
-        .map_err(|_| LendingError::Overflow)?;
+    let settled =
+        debt::settle_accrual(position, now, rate_bps).map_err(|_| LendingError::Overflow)?;
     Ok(settled)
 }
 
@@ -2252,7 +2271,7 @@ fn check_emergency_status(env: &Env, action: ProtocolAction) {
         EmergencyState::Normal => {}
         EmergencyState::Shutdown => panic!("OperationDisabledDuringShutdown"),
         EmergencyState::Recovery => match action {
-            ProtocolAction::Repay | ProtocolAction::Withdraw | ProtocolAction::Liquidate => {},
+            ProtocolAction::Repay | ProtocolAction::Withdraw | ProtocolAction::Liquidate => {}
             _ => panic!("ActionBlockedInRecovery"),
         },
     }
@@ -2511,7 +2530,12 @@ pub(crate) mod test {
         env.ledger().set(li);
     }
 
-    pub(crate) fn build_oracle_payload(env: &Env, asset: &Address, price: i128, timestamp: u64) -> Bytes {
+    pub(crate) fn build_oracle_payload(
+        env: &Env,
+        asset: &Address,
+        price: i128,
+        timestamp: u64,
+    ) -> Bytes {
         let mut payload = Bytes::new(env);
         payload.append(&Bytes::from_slice(env, ORACLE_SIGNATURE_DOMAIN));
         payload.append(&asset.to_xdr(env));
