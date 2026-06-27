@@ -628,22 +628,10 @@ impl LendingContract {
         };
 
         const INCENTIVE_BPS: i128 = 1000;
-        let seized_collateral = if let Some(price) = price_opt {
-            actual_repay
-                .checked_mul(10000 + INCENTIVE_BPS)
-                .ok_or(LendingError::Overflow)?
-                .checked_mul(PRICE_SCALE)
-                .ok_or(LendingError::Overflow)?
-                .checked_div(10000)
-                .ok_or(LendingError::Overflow)?
-                .checked_div(price)
-                .ok_or(LendingError::Overflow)?
-        } else {
-            actual_repay
-                .checked_mul(10000 + INCENTIVE_BPS)
-                .and_then(|v| v.checked_div(10000))
-                .ok_or(LendingError::Overflow)?
-        };
+        let seized_collateral = actual_repay
+            .checked_mul(10000 + INCENTIVE_BPS)
+            .and_then(|v| v.checked_div(10000))
+            .ok_or(LendingError::Overflow)?;
 
         // Ensure we don't seize more than available
         let final_seized = if seized_collateral > collateral {
