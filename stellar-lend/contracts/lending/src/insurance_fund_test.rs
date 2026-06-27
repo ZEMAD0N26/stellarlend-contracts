@@ -1,11 +1,23 @@
 #![cfg(test)]
 
-use crate::{LendingContract, LendingContractClient, DataKey};
 use crate::debt::DebtPosition;
 use crate::rounding_strategy::SECONDS_PER_YEAR;
-use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env};
+use crate::{DataKey, LendingContract, LendingContractClient};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env,
+};
 
-fn setup() -> (Env, LendingContractClient<'static>, Address, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    LendingContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let id = env.register(LendingContract, ());
@@ -13,8 +25,19 @@ fn setup() -> (Env, LendingContractClient<'static>, Address, Address, Address, A
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let liquidator = Address::generate(&env);
+    let debt_asset = Address::generate(&env);
+    let collateral_asset = Address::generate(&env);
     client.initialize(&admin);
-    (env, client, id, admin, user, liquidator)
+    (
+        env,
+        client,
+        id,
+        admin,
+        user,
+        liquidator,
+        debt_asset,
+        collateral_asset,
+    )
 }
 
 /// Advance ledger time by specified seconds
@@ -27,7 +50,7 @@ fn advance_ledger_time(env: &Env, seconds: u64) {
 
 #[test]
 fn test_configure_insurance_share_bounds() {
-    let (_env, client, _id, admin, _user, _liquidator) = setup();
+    let (_env, client, _id, admin, _user, _liquidator, _debt_asset, _collateral_asset) = setup();
 
     // Check default is 0
     assert_eq!(client.get_insurance_share(), 0);
@@ -51,7 +74,7 @@ fn test_configure_insurance_share_bounds() {
 
 #[test]
 fn test_admin_explicit_funding() {
-    let (_env, client, _id, admin, _user, _liquidator) = setup();
+    let (_env, client, _id, admin, _user, _liquidator, _debt_asset, _collateral_asset) = setup();
 
     assert_eq!(client.get_insurance_fund(), 0);
 
@@ -73,7 +96,7 @@ fn test_admin_explicit_funding() {
 
 #[test]
 fn test_accrual_interest_split() {
-    let (env, client, _id, _admin, user, _liquidator) = setup();
+    let (env, client, _id, _admin, user, _liquidator, _debt_asset, _collateral_asset) = setup();
 
     // Configure 30% insurance share
     client.set_insurance_share(&3000);
@@ -102,7 +125,7 @@ fn test_accrual_interest_split() {
 
 #[test]
 fn test_liquidation_empty_insurance_fund() {
-    let (env, client, id, _admin, user, liquidator) = setup();
+    let (env, client, id, _admin, user, liquidator, debt_asset, collateral_asset) = setup();
 
     // Set up shortfall: collateral = 10, debt = 200.
     // max_repay = 200 * 50% = 100.
@@ -130,7 +153,7 @@ fn test_liquidation_empty_insurance_fund() {
     assert_eq!(client.get_bad_debt(), 0);
 
     // Perform liquidation
-    let repaid = client.liquidate(&liquidator, &user, &1000);
+    let repaid = client.liquidate(&liquidator, &user, &debt_asset, &collateral_asset, &1000);
     assert_eq!(repaid, 100);
 
     // Shortfall (100) must be recorded fully as bad debt
@@ -140,7 +163,7 @@ fn test_liquidation_empty_insurance_fund() {
 
 #[test]
 fn test_liquidation_partial_insurance_coverage() {
-    let (env, client, id, _admin, user, liquidator) = setup();
+    let (env, client, id, _admin, user, liquidator, debt_asset, collateral_asset) = setup();
 
     // Fund the insurance fund with 40 tokens
     client.fund_insurance(&40);
@@ -165,7 +188,7 @@ fn test_liquidation_partial_insurance_coverage() {
     });
 
     // Perform liquidation
-    let repaid = client.liquidate(&liquidator, &user, &1000);
+    let repaid = client.liquidate(&liquidator, &user, &debt_asset, &collateral_asset, &1000);
     assert_eq!(repaid, 100);
 
     // Insurance fund covers 40, leaving 60 to bad debt
@@ -175,7 +198,7 @@ fn test_liquidation_partial_insurance_coverage() {
 
 #[test]
 fn test_liquidation_full_insurance_coverage() {
-    let (env, client, id, _admin, user, liquidator) = setup();
+    let (env, client, id, _admin, user, liquidator, debt_asset, collateral_asset) = setup();
 
     // Fund the insurance fund with 150 tokens
     client.fund_insurance(&150);
@@ -200,7 +223,7 @@ fn test_liquidation_full_insurance_coverage() {
     });
 
     // Perform liquidation
-    let repaid = client.liquidate(&liquidator, &user, &1000);
+    let repaid = client.liquidate(&liquidator, &user, &debt_asset, &collateral_asset, &1000);
     assert_eq!(repaid, 100);
 
     // Insurance fund covers all 100 shortfall, 50 remains in fund, bad debt remains 0

@@ -10,7 +10,7 @@
 #![cfg(test)]
 
 use crate::{
-    debt::{load_debt, save_debt, DebtPosition, DEFAULT_APR_BPS},
+    debt::{save_debt, DebtPosition, DEFAULT_APR_BPS},
     rounding_strategy::SECONDS_PER_YEAR,
     DataKey, LendingContract, LendingContractClient, LendingError,
 };
@@ -26,6 +26,8 @@ fn setup() -> (
     Address,
     Address,
     Address,
+    Address,
+    Address,
 ) {
     let env = Env::default();
     env.mock_all_auths();
@@ -36,10 +38,20 @@ fn setup() -> (
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let liquidator = Address::generate(&env);
+    let debt_asset = Address::generate(&env);
+    let collateral_asset = Address::generate(&env);
 
     client.initialize(&admin);
 
-    (env, client, admin, user, liquidator)
+    (
+        env,
+        client,
+        admin,
+        user,
+        liquidator,
+        debt_asset,
+        collateral_asset,
+    )
 }
 
 /// Advance ledger time by specified seconds.
@@ -69,7 +81,7 @@ fn calculate_expected_interest(principal: i128, elapsed_seconds: u64, rate_bps: 
 /// at the moment of liquidation, matching the non-liquidation repay path.
 #[test]
 fn test_liquidate_accrual_parity() {
-    let (env, client, _admin, user, liquidator) = setup();
+    let (env, client, _admin, user, liquidator, debt_asset, collateral_asset) = setup();
 
     let initial_collateral = 100i128;
     let initial_debt = 200i128;
@@ -99,7 +111,13 @@ fn test_liquidate_accrual_parity() {
 
     // Repay a portion via liquidation (e.g., 50 units)
     let repay_amount = 50i128;
-    let actual_repay = client.liquidate(&liquidator, &user, &repay_amount);
+    let actual_repay = client.liquidate(
+        &liquidator,
+        &user,
+        &debt_asset,
+        &collateral_asset,
+        &repay_amount,
+    );
     assert_eq!(actual_repay, repay_amount);
 
     // Verify post-liquidation position
@@ -122,7 +140,7 @@ fn test_liquidate_accrual_parity() {
 /// correctly during liquidation.
 #[test]
 fn test_liquidate_long_horizon_accrual() {
-    let (env, client, _admin, user, liquidator) = setup();
+    let (env, client, _admin, user, liquidator, debt_asset, collateral_asset) = setup();
 
     let initial_collateral = 10_000i128;
     let initial_debt = 1_000i128;
@@ -159,7 +177,7 @@ fn test_liquidate_long_horizon_accrual() {
     });
 
     // Repay 100 units
-    let actual_repay = client.liquidate(&liquidator, &user, &100);
+    let actual_repay = client.liquidate(&liquidator, &user, &debt_asset, &collateral_asset, &100);
     assert_eq!(actual_repay, 100);
 
     let post_position = client.get_debt_position(&user);
@@ -175,7 +193,7 @@ fn test_liquidate_long_horizon_accrual() {
 /// after interest accrues over time.
 #[test]
 fn test_liquidate_health_factor_after_settle_boundary() {
-    let (env, client, _admin, user, liquidator) = setup();
+    let (env, client, _admin, user, liquidator, debt_asset, collateral_asset) = setup();
 
     // Set up a position close to the liquidation threshold:
     // collateral = 100, principal = 80 -> HF = 100 * 8000 / 80 = 10000 (exactly healthy)
@@ -198,7 +216,7 @@ fn test_liquidate_health_factor_after_settle_boundary() {
     });
 
     // Liquidation should fail immediately at t=0 because position is healthy (hf >= 10000)
-    let result_t0 = client.try_liquidate(&liquidator, &user, &10);
+    let result_t0 = client.try_liquidate(&liquidator, &user, &debt_asset, &collateral_asset, &10);
     assert!(
         matches!(result_t0, Err(Ok(LendingError::PositionHealthy))),
         "should reject liquidation at t=0 as healthy"
@@ -210,7 +228,7 @@ fn test_liquidate_health_factor_after_settle_boundary() {
     // Expected interest: 80 * 5% = 4. Expected settled debt: 84.
     // HF after settle: 100 * 8000 / 84 = 9523 < 10000 (unhealthy!)
     // Liquidation should now succeed because the settled debt drops HF below the threshold.
-    let result_t1 = client.try_liquidate(&liquidator, &user, &10);
+    let result_t1 = client.try_liquidate(&liquidator, &user, &debt_asset, &collateral_asset, &10);
     assert!(
         result_t1.is_ok(),
         "should allow liquidation after time advancement due to interest accrual lowering HF"

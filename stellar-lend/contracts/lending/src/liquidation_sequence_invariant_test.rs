@@ -47,7 +47,14 @@ fn operation_sequence_strategy() -> impl Strategy<Value = Vec<Operation>> {
 
 /// Creates a fresh contract instance with a borrower and a liquidator so each
 /// case starts from the same healthy baseline before the seeded sequence runs.
-fn setup_sequence_case() -> (Env, LendingContractClient<'static>, Address, Address) {
+fn setup_sequence_case() -> (
+    Env,
+    LendingContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register(LendingContract, ());
@@ -55,10 +62,19 @@ fn setup_sequence_case() -> (Env, LendingContractClient<'static>, Address, Addre
     let admin = Address::generate(&env);
     let borrower = Address::generate(&env);
     let liquidator = Address::generate(&env);
+    let debt_asset = Address::generate(&env);
+    let collateral_asset = Address::generate(&env);
     client.initialize(&admin);
     client.deposit(&borrower, &100);
     client.borrow(&borrower, &200);
-    (env, client, borrower, liquidator)
+    (
+        env,
+        client,
+        borrower,
+        liquidator,
+        debt_asset,
+        collateral_asset,
+    )
 }
 
 /// Computes the liquidation outcome enforced by the contract's current fixed
@@ -89,7 +105,8 @@ fn liquidation_sequence_invariants_hold_across_seeded_sequences() {
     let strategy = operation_sequence_strategy();
     runner
         .run(&strategy, |ops| {
-            let (_env, client, borrower, liquidator) = setup_sequence_case();
+            let (_env, client, borrower, liquidator, debt_asset, collateral_asset) =
+                setup_sequence_case();
             let mut expected_collateral = 100i128;
             let mut expected_debt = 200i128;
             let mut total_repaid = 0i128;
@@ -134,7 +151,13 @@ fn liquidation_sequence_invariants_hold_across_seeded_sequences() {
                     Operation::Liquidate(amount) => {
                         liquidations_seen += 1;
                         let amount = amount as i128;
-                        let result = client.try_liquidate(&liquidator, &borrower, &amount);
+                        let result = client.try_liquidate(
+                            &liquidator,
+                            &borrower,
+                            &debt_asset,
+                            &collateral_asset,
+                            &amount,
+                        );
                         let outcome = result;
 
                         if let Ok(actual_repay) = outcome {
