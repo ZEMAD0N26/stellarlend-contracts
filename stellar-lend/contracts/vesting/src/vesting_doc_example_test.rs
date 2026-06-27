@@ -82,13 +82,21 @@ fn revoke_claws_unvested_portion() {
 
     // Revoke at now=1_400 (no prior claim).
     // After sync: released=500, locked=500
-    let transferred = c.revoke("admin", "alice", 1_400).expect("revoke should succeed");
-    assert_eq!(transferred, 500, "unvested portion (500) clawed to treasury");
+    let transferred = c
+        .revoke("admin", "alice", 1_400)
+        .expect("revoke should succeed");
+    assert_eq!(
+        transferred, 500,
+        "unvested portion (500) clawed to treasury"
+    );
 
     let grants = c.get_grants("alice");
     assert_eq!(grants.len(), 1);
     assert!(grants[0].revoked, "grant should be marked revoked");
-    assert_eq!(grants[0].total, 500, "total reset to released (vested) portion");
+    assert_eq!(
+        grants[0].total, 500,
+        "total reset to released (vested) portion"
+    );
 
     // The vested portion is still claimable
     let claimable = grants[0].claimable();
@@ -106,13 +114,19 @@ fn revoke_after_partial_claim() {
 
     // Revoke at now=1_200 (after partial claim).
     // released=250, claimed=250, locked=750
-    let transferred = c.revoke("admin", "alice", 1_200).expect("revoke should succeed");
+    let transferred = c
+        .revoke("admin", "alice", 1_200)
+        .expect("revoke should succeed");
     assert_eq!(transferred, 750, "remaining unvested clawed back");
 
     let grants = c.get_grants("alice");
     assert_eq!(grants[0].total, 250, "total reset to released");
     assert_eq!(grants[0].claimed, 250, "claimed unchanged");
-    assert_eq!(grants[0].claimable(), 0, "all vested tokens already claimed");
+    assert_eq!(
+        grants[0].claimable(),
+        0,
+        "all vested tokens already claimed"
+    );
 }
 
 #[test]
@@ -121,7 +135,9 @@ fn revoke_at_zero_vested_returns_entire_principal() {
     c.add_grant("alice", TOTAL, START, DURATION, CLIFF);
 
     // Revoke before cliff — entire principal is locked.
-    let transferred = c.revoke("admin", "alice", START).expect("revoke should succeed");
+    let transferred = c
+        .revoke("admin", "alice", START)
+        .expect("revoke should succeed");
     assert_eq!(transferred, TOTAL, "entire principal clawed back");
 
     let grants = c.get_grants("alice");

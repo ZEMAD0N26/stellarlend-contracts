@@ -208,7 +208,10 @@ fn test_borrow_health_check_mixed_decimals() {
         // Borrow 14 units of debt asset → $14 debt value. Should be healthy.
         cross_asset_borrow(&env, user.clone(), Some(token_b.clone()), 14).unwrap();
         let summary = get_user_position_summary(&env, &user).unwrap();
-        assert_eq!(summary.is_healthy, 1, "14 < 15 borrow capacity, should be healthy");
+        assert_eq!(
+            summary.is_healthy, 1,
+            "14 < 15 borrow capacity, should be healthy"
+        );
 
         // Repay everything and try to borrow 16 — should fail (exceeds capacity).
         cross_asset_repay(&env, user.clone(), Some(token_b.clone()), 14).unwrap();

@@ -100,9 +100,9 @@ proptest! {
 #[test]
 fn zero_fee_credits_full_amount() {
     for amount in [1, 100, 999, 1_000_000, i128::MAX / 10_000] {
-        let fee      = bridge_fee(amount, 0).unwrap();
+        let fee = bridge_fee(amount, 0).unwrap();
         let credited = bridge_credited(amount, 0).unwrap();
-        assert_eq!(fee, 0,      "zero fee_bps must produce 0 fee, got {fee}");
+        assert_eq!(fee, 0, "zero fee_bps must produce 0 fee, got {fee}");
         assert_eq!(credited, amount, "zero fee_bps must credit full amount");
     }
 }
@@ -113,8 +113,11 @@ fn zero_fee_credits_full_amount() {
 
 #[test]
 fn zero_amount_rejected() {
-    assert!(bridge_fee(0, 30).is_none(),  "amount=0 must be rejected");
-    assert!(bridge_fee(-1, 30).is_none(), "negative amount must be rejected");
+    assert!(bridge_fee(0, 30).is_none(), "amount=0 must be rejected");
+    assert!(
+        bridge_fee(-1, 30).is_none(),
+        "negative amount must be rejected"
+    );
     assert!(bridge_fee(-1_000_000, 0).is_none());
 }
 
@@ -224,7 +227,8 @@ fn accrued_fee_multiple_deposits_exact() {
     assert_eq!(accrued, 18);
     // Conservation: sum of (credited+fee) == sum of amounts
     let total_in: i128 = amounts.iter().sum();
-    let total_credited: i128 = amounts.iter()
+    let total_credited: i128 = amounts
+        .iter()
         .map(|&a| bridge_credited(a, fee_bps).unwrap())
         .sum();
     assert_eq!(total_credited + accrued, total_in);
@@ -232,6 +236,12 @@ fn accrued_fee_multiple_deposits_exact() {
 
 #[test]
 fn invalid_fee_bps_rejected() {
-    assert!(bridge_fee(100, -1).is_none(),    "negative fee_bps must be rejected");
-    assert!(bridge_fee(100, 10_001).is_none(), "fee_bps > 10_000 must be rejected");
+    assert!(
+        bridge_fee(100, -1).is_none(),
+        "negative fee_bps must be rejected"
+    );
+    assert!(
+        bridge_fee(100, 10_001).is_none(),
+        "fee_bps > 10_000 must be rejected"
+    );
 }

@@ -229,15 +229,17 @@ fn load_user_position(env: &Env, key: &AssetKey, user: &Address) -> AssetPositio
 }
 
 fn save_user_supply(env: &Env, key: &AssetKey, user: &Address, amount: i128) {
-    env.storage()
-        .persistent()
-        .set(&CrossAssetDataKey::UserSupply(key.clone(), user.clone()), &amount);
+    env.storage().persistent().set(
+        &CrossAssetDataKey::UserSupply(key.clone(), user.clone()),
+        &amount,
+    );
 }
 
 fn save_user_debt(env: &Env, key: &AssetKey, user: &Address, amount: i128) {
-    env.storage()
-        .persistent()
-        .set(&CrossAssetDataKey::UserDebt(key.clone(), user.clone()), &amount);
+    env.storage().persistent().set(
+        &CrossAssetDataKey::UserDebt(key.clone(), user.clone()),
+        &amount,
+    );
 }
 
 fn load_total_supply(env: &Env, key: &AssetKey) -> i128 {
@@ -405,7 +407,11 @@ pub fn get_asset_price_age(
         return Ok(None);
     }
 
-    Ok(Some(env.ledger().timestamp().saturating_sub(cfg.last_price_update)))
+    Ok(Some(
+        env.ledger()
+            .timestamp()
+            .saturating_sub(cfg.last_price_update),
+    ))
 }
 
 /// Return the configuration for a given asset.
@@ -531,7 +537,10 @@ pub fn cross_asset_deposit(
     let _cfg = load_config(env, &key)?;
 
     let mut pos = load_user_position(env, &key, &user);
-    pos.supplied = pos.supplied.checked_add(amount).ok_or(CrossAssetError::Overflow)?;
+    pos.supplied = pos
+        .supplied
+        .checked_add(amount)
+        .ok_or(CrossAssetError::Overflow)?;
     save_user_supply(env, &key, &user, pos.supplied);
 
     let total = load_total_supply(env, &key)
@@ -586,7 +595,10 @@ pub fn cross_asset_borrow(
     }
 
     let mut pos = load_user_position(env, &key, &user);
-    pos.borrowed = pos.borrowed.checked_add(amount).ok_or(CrossAssetError::Overflow)?;
+    pos.borrowed = pos
+        .borrowed
+        .checked_add(amount)
+        .ok_or(CrossAssetError::Overflow)?;
     save_user_debt(env, &key, &user, pos.borrowed);
 
     let total = load_total_debt(env, &key)

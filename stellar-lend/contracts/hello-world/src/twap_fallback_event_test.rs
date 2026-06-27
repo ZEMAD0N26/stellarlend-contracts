@@ -20,8 +20,8 @@ mod tests {
     use crate::amm_twap::{update_twap_accumulators, PRICE_SCALE};
     use crate::events::{TwapFallbackUsedEvent, EVENT_SCHEMA_VERSION, PRIMARY_FEED_ABSENT};
     use crate::oracle::{
-        get_price, get_price_with_fallback, set_oracle_config, update_price_feed,
-        ExternalOracle, OracleConfig, OracleDataKey, PriceFeed,
+        get_price, get_price_with_fallback, set_oracle_config, update_price_feed, ExternalOracle,
+        OracleConfig, OracleDataKey, PriceFeed,
     };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -84,9 +84,7 @@ mod tests {
             // soroban_sdk provides IntoVal / TryFromVal; we use the raw XDR
             // round-trip available on test event data.
             let (_, _, raw_data) = event;
-            if let Ok(decoded) =
-                TwapFallbackUsedEvent::try_from_val(env, &raw_data)
-            {
+            if let Ok(decoded) = TwapFallbackUsedEvent::try_from_val(env, &raw_data) {
                 if decoded.schema_version == EVENT_SCHEMA_VERSION {
                     return Some(decoded);
                 }
@@ -171,7 +169,10 @@ mod tests {
         );
 
         // asset
-        assert_eq!(event.asset, asset, "event asset must match the queried asset");
+        assert_eq!(
+            event.asset, asset,
+            "event asset must match the queried asset"
+        );
 
         // primary_age_secs — must match the staleness we set
         assert_eq!(
@@ -255,11 +256,9 @@ mod tests {
 
         let event = find_fallback_event(&env).expect("event must be emitted");
         assert_eq!(
-            event.schema_version,
-            EVENT_SCHEMA_VERSION,
+            event.schema_version, EVENT_SCHEMA_VERSION,
             "schema_version mismatch: event has {}, expected {}",
-            event.schema_version,
-            EVENT_SCHEMA_VERSION
+            event.schema_version, EVENT_SCHEMA_VERSION
         );
     }
 

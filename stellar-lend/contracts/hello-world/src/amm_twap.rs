@@ -269,7 +269,10 @@ fn maybe_write_snapshot(env: &Env, asset: &Address, state: &TwapPoolState) {
         // Safety check: only evict the oldest entry when it falls outside the
         // maximum supported query window (with safety margin), so that callers
         // using the longest window always have a valid start anchor.
-        let oldest_ts: u64 = snaps.first().map(|s: TwapSnapshot| s.timestamp).unwrap_or(0);
+        let oldest_ts: u64 = snaps
+            .first()
+            .map(|s: TwapSnapshot| s.timestamp)
+            .unwrap_or(0);
         let oldest_age = state.last_timestamp.saturating_sub(oldest_ts);
         let safe_eviction_threshold = MAX_TWAP_WINDOW_SECS.saturating_mul(EVICTION_SAFETY_FACTOR);
 

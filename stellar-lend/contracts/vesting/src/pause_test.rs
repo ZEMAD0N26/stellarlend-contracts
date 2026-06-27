@@ -113,13 +113,18 @@ fn claim_succeeds_after_resume() {
     c.pause("admin").expect("admin should be able to pause");
 
     // Blocked while paused.
-    assert_eq!(c.claim("alice", 500).unwrap_err(), VestingError::ContractPaused);
+    assert_eq!(
+        c.claim("alice", 500).unwrap_err(),
+        VestingError::ContractPaused
+    );
 
     c.resume("admin").expect("admin should be able to resume");
     assert!(!c.is_paused());
 
     // Now claim at t=500 — 50 % of 1 000 = 500 tokens.
-    let claimed = c.claim("alice", 500).expect("claim should succeed after resume");
+    let claimed = c
+        .claim("alice", 500)
+        .expect("claim should succeed after resume");
     assert_eq!(claimed, 500);
     assert_eq!(c.balance_of("alice"), 500);
     assert_eq!(c.total_locked(), 500);
@@ -161,20 +166,27 @@ fn vesting_math_unchanged_during_pause() {
     let mut c = setup_with_grant();
 
     // Partial claim before the pause: 200 tokens at t=200.
-    let pre_pause_claimed = c.claim("alice", 200).expect("claim should succeed before pause");
+    let pre_pause_claimed = c
+        .claim("alice", 200)
+        .expect("claim should succeed before pause");
     assert_eq!(pre_pause_claimed, 200);
 
     c.pause("admin").expect("admin should be able to pause");
 
     // During the pause, time advances to t=600 (another 400 tokens vest).
     // Claim is blocked.
-    assert_eq!(c.claim("alice", 600).unwrap_err(), VestingError::ContractPaused);
+    assert_eq!(
+        c.claim("alice", 600).unwrap_err(),
+        VestingError::ContractPaused
+    );
 
     c.resume("admin").expect("admin should be able to resume");
 
     // After resume, claim at t=600 — total vested = 600, already claimed = 200,
     // so 400 more should be released.
-    let post_resume_claimed = c.claim("alice", 600).expect("claim should succeed after resume");
+    let post_resume_claimed = c
+        .claim("alice", 600)
+        .expect("claim should succeed after resume");
     assert_eq!(post_resume_claimed, 400);
     assert_eq!(c.balance_of("alice"), 600);
     assert_eq!(c.total_locked(), 400);
@@ -199,7 +211,8 @@ fn pause_is_idempotent() {
 fn resume_is_idempotent() {
     let mut c = setup_with_grant();
     // Not paused; resume is a no-op.
-    c.resume("admin").expect("resume when not paused should be a no-op");
+    c.resume("admin")
+        .expect("resume when not paused should be a no-op");
     assert!(!c.is_paused());
 }
 
@@ -245,7 +258,10 @@ fn full_pause_resume_cycle() {
     c.pause("admin").expect("pause");
     assert!(c.is_paused());
 
-    assert_eq!(c.claim("alice", 300).unwrap_err(), VestingError::ContractPaused);
+    assert_eq!(
+        c.claim("alice", 300).unwrap_err(),
+        VestingError::ContractPaused
+    );
     assert_eq!(
         c.revoke("admin", "bob", 300).unwrap_err(),
         VestingError::ContractPaused

@@ -1,4 +1,3 @@
-cargo check -p vesting
 #[cfg(test)]
 mod tests {
     use crate::test::{create_vesting_contract, get_env}; // Adjust paths based on your actual test module
@@ -11,7 +10,7 @@ mod tests {
     fn test_revoke_mid_vest_split_accuracy() {
         let env = get_env();
         let client = create_vesting_contract(&env);
-        
+
         // Setup logic: Create grant, advance time to mid-vest
         // Perform revocation
         // Assertions:
@@ -19,4 +18,3 @@ mod tests {
         // assert!(treasury_received == expected_unvested_remainder);
     }
 }
-

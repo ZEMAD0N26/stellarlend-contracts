@@ -51,7 +51,12 @@ fn expected_swap_out(ra: i128, rb: i128, amount_in: i128, fee_bps: i128) -> Opti
 }
 
 /// Compute the post-swap reserve state for a successful swap.
-fn expected_reserves_after(ra: i128, rb: i128, amount_in: i128, fee_bps: i128) -> Option<(i128, i128)> {
+fn expected_reserves_after(
+    ra: i128,
+    rb: i128,
+    amount_in: i128,
+    fee_bps: i128,
+) -> Option<(i128, i128)> {
     let out = expected_swap_out(ra, rb, amount_in, fee_bps)?;
     Some((ra.checked_add(amount_in)?, rb.checked_sub(out)?))
 }
@@ -78,7 +83,7 @@ fn integration_swap_output_matches_amm_formula() {
 
     // Verify conservation: amount_out < reserve_b
     assert!(expected < rb, "output must not drain reserve_b");
-    assert!(expected > 0,  "output must be positive");
+    assert!(expected > 0, "output must be positive");
 }
 
 /// Same test with the pool sizes reversed — verifies the formula is not
@@ -89,7 +94,10 @@ fn integration_swap_output_asymmetry_ra_rb() {
     let out_ab = expected_swap_out(100_000, 200_000, amt, fee).unwrap();
     let out_ba = expected_swap_out(200_000, 100_000, amt, fee).unwrap();
     assert_ne!(out_ab, out_ba, "swapping ra↔rb must change output");
-    assert!(out_ab > out_ba, "larger reserve_b → larger output for same input");
+    assert!(
+        out_ab > out_ba,
+        "larger reserve_b → larger output for same input"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -107,8 +115,8 @@ fn integration_reserve_state_consistent_after_swap() {
     let out = expected_swap_out(ra, rb, amt, fee).unwrap();
     let (new_ra, new_rb) = expected_reserves_after(ra, rb, amt, fee).unwrap();
 
-    assert_eq!(new_ra, ra + amt,  "reserve_a must increase by amount_in");
-    assert_eq!(new_rb, rb - out,  "reserve_b must decrease by amount_out");
+    assert_eq!(new_ra, ra + amt, "reserve_a must increase by amount_in");
+    assert_eq!(new_rb, rb - out, "reserve_b must decrease by amount_out");
 
     // k-monotonicity: pool invariant must not decrease
     assert!(new_ra * new_rb >= ra * rb, "k must not decrease after swap");
@@ -142,13 +150,19 @@ fn integration_successive_swaps_use_updated_reserves() {
 fn integration_fee_passthrough_zero_vs_nonzero() {
     let (ra, rb, amt) = (100_000i128, 100_000i128, 10_000i128);
 
-    let out_no_fee  = expected_swap_out(ra, rb, amt, 0).unwrap();
-    let out_30_bps  = expected_swap_out(ra, rb, amt, 30).unwrap();
+    let out_no_fee = expected_swap_out(ra, rb, amt, 0).unwrap();
+    let out_30_bps = expected_swap_out(ra, rb, amt, 30).unwrap();
     let out_100_bps = expected_swap_out(ra, rb, amt, 100).unwrap();
 
     // Outputs must be strictly decreasing as fee increases
-    assert!(out_no_fee > out_30_bps,  "zero fee must give more output than 30 bps");
-    assert!(out_30_bps > out_100_bps, "30 bps must give more output than 100 bps");
+    assert!(
+        out_no_fee > out_30_bps,
+        "zero fee must give more output than 30 bps"
+    );
+    assert!(
+        out_30_bps > out_100_bps,
+        "30 bps must give more output than 100 bps"
+    );
 }
 
 #[test]
@@ -170,15 +184,27 @@ fn integration_fee_at_boundary_9999_bps() {
 #[test]
 fn integration_empty_pool_returns_none() {
     // reserve_a = 0 → invalid pool
-    assert!(expected_swap_out(0, 100_000, 1_000, 30).is_none(), "empty pool_a must fail");
+    assert!(
+        expected_swap_out(0, 100_000, 1_000, 30).is_none(),
+        "empty pool_a must fail"
+    );
     // reserve_b = 0 → invalid pool
-    assert!(expected_swap_out(100_000, 0, 1_000, 30).is_none(), "empty pool_b must fail");
+    assert!(
+        expected_swap_out(100_000, 0, 1_000, 30).is_none(),
+        "empty pool_b must fail"
+    );
 }
 
 #[test]
 fn integration_zero_amount_in_is_rejected() {
-    assert!(expected_swap_out(100_000, 100_000, 0, 30).is_none(), "zero amount_in must be rejected");
-    assert!(expected_swap_out(100_000, 100_000, -1, 30).is_none(), "negative amount_in must be rejected");
+    assert!(
+        expected_swap_out(100_000, 100_000, 0, 30).is_none(),
+        "zero amount_in must be rejected"
+    );
+    assert!(
+        expected_swap_out(100_000, 100_000, -1, 30).is_none(),
+        "negative amount_in must be rejected"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +219,10 @@ fn integration_large_swap_bounded_by_reserve_b() {
     let huge_in = 1_000_000_000i128;
     let out = expected_swap_out(ra, rb, huge_in, 30).unwrap();
 
-    assert!(out < rb, "output must be strictly less than reserve_b, got {out}");
+    assert!(
+        out < rb,
+        "output must be strictly less than reserve_b, got {out}"
+    );
     assert!(out > 0);
 
     // Verify reserve consistency
@@ -214,23 +243,31 @@ fn integration_large_swap_bounded_by_reserve_b() {
 #[test]
 fn integration_sweep_amounts_and_fees() {
     let (ra, rb) = (1_000_000i128, 1_000_000i128);
-    let amounts  = [1i128, 100, 1_000, 10_000, 100_000, 500_000];
-    let fees     = [0i128, 10, 30, 100, 500, 1_000, 5_000, 9_999];
+    let amounts = [1i128, 100, 1_000, 10_000, 100_000, 500_000];
+    let fees = [0i128, 10, 30, 100, 500, 1_000, 5_000, 9_999];
 
     for &amt in &amounts {
         for &fee in &fees {
             let out = match expected_swap_out(ra, rb, amt, fee) {
                 Some(v) => v,
-                None    => continue,
+                None => continue,
             };
-            assert!(out >= 0,   "output must be non-negative (amt={amt}, fee={fee})");
-            assert!(out < rb,   "output must be < reserve_b (amt={amt}, fee={fee})");
+            assert!(
+                out >= 0,
+                "output must be non-negative (amt={amt}, fee={fee})"
+            );
+            assert!(
+                out < rb,
+                "output must be < reserve_b (amt={amt}, fee={fee})"
+            );
 
             let (new_ra, new_rb) = expected_reserves_after(ra, rb, amt, fee).unwrap();
             let k_before = ra * rb;
-            let k_after  = new_ra.checked_mul(new_rb).unwrap_or(i128::MAX);
-            assert!(k_after >= k_before,
-                "k decreased (amt={amt}, fee={fee}): before={k_before} after={k_after}");
+            let k_after = new_ra.checked_mul(new_rb).unwrap_or(i128::MAX);
+            assert!(
+                k_after >= k_before,
+                "k decreased (amt={amt}, fee={fee}): before={k_before} after={k_after}"
+            );
         }
     }
 }

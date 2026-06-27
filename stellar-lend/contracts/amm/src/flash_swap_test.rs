@@ -36,7 +36,7 @@
 
 #![cfg(test)]
 
-use crate::{AmmContract, AmmContractClient, inverse_swap_in};
+use crate::{inverse_swap_in, AmmContract, AmmContractClient};
 use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Bytes, Env};
 
 const FEE_BPS: i128 = 30;
@@ -95,8 +95,7 @@ fn test_flash_then_repay_recovers_state() {
     let amount_out: i128 = 332;
     client.flash_swap_a_for_b(&amount_out, &FEE_BPS, &Bytes::new(&env));
 
-    let amount_in: i128 =
-        inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
+    let amount_in: i128 = inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
     client.repay_flash_swap(&amount_in);
 
     let (ra, rb) = client.get_reserves();
@@ -131,8 +130,7 @@ fn test_over_repay_yields_extra_fee() {
     let amount_out: i128 = 100;
     client.flash_swap_a_for_b(&amount_out, &FEE_BPS, &Bytes::new(&env));
 
-    let exact_in: i128 =
-        inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
+    let exact_in: i128 = inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
     let over_in: i128 = exact_in.saturating_mul(2);
     client.repay_flash_swap(&over_in);
 
@@ -156,8 +154,7 @@ fn test_under_repay_panics_k_violation() {
     let amount_out: i128 = 332;
     client.flash_swap_a_for_b(&amount_out, &FEE_BPS, &Bytes::new(&env));
 
-    let exact_in: i128 =
-        inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
+    let exact_in: i128 = inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
     let under_in: i128 = exact_in - 1;
     client.repay_flash_swap(&under_in);
 }
@@ -177,8 +174,7 @@ fn test_rollback_full_state_on_under_pay() {
     let amm_client = AmmContractClient::new(&env, &amm_id);
 
     let amount_out: i128 = 100;
-    let exact_in: i128 =
-        inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
+    let exact_in: i128 = inverse_swap_in(1_000_i128, 1_000_i128, amount_out, FEE_BPS);
     let under_in: i128 = exact_in - 1;
 
     let proxy_id = env.register(ProxyContract, ());
@@ -284,11 +280,7 @@ fn test_reentrancy_blocks_nested() {
     let client = AmmContractClient::new(&env, &amm_id);
 
     client.flash_swap_a_for_b(&100, &FEE_BPS, &Bytes::new(&env));
-    client.flash_swap_a_for_b(
-        &1_i128,
-        &FEE_BPS,
-        &Bytes::new(&env),
-    );
+    client.flash_swap_a_for_b(&1_i128, &FEE_BPS, &Bytes::new(&env));
 }
 
 // =========================================================================
@@ -333,9 +325,7 @@ fn test_invalid_fee_bps_rejected() {
 }
 
 #[test]
-#[should_panic(
-    expected = "Insufficient reserves: amount_out would drain reserve_b"
-)]
+#[should_panic(expected = "Insufficient reserves: amount_out would drain reserve_b")]
 fn test_drain_rejected() {
     let (env, amm_id) = setup_pool(1_000, 1_000);
     let client = AmmContractClient::new(&env, &amm_id);

@@ -16,9 +16,8 @@ mod tests {
     use soroban_sdk::{testutils::Ledger, Address, Env};
 
     use crate::amm_twap::{
-        get_snapshots, get_twap, update_twap_accumulators, EVICTION_SAFETY_FACTOR,
-        MAX_SNAPSHOTS, MAX_TWAP_WINDOW_SECS, MIN_WINDOW_SECS, PRICE_SCALE,
-        SNAPSHOT_INTERVAL_SECS,
+        get_snapshots, get_twap, update_twap_accumulators, EVICTION_SAFETY_FACTOR, MAX_SNAPSHOTS,
+        MAX_TWAP_WINDOW_SECS, MIN_WINDOW_SECS, PRICE_SCALE, SNAPSHOT_INTERVAL_SECS,
     };
 
     // ── Test helpers ─────────────────────────────────────────────────────────

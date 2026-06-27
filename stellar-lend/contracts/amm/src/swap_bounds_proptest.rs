@@ -38,7 +38,9 @@ fn swap_out(reserve_a: i128, reserve_b: i128, amount_in: i128, fee_bps: i128) ->
     let fee_adj = 10_000i128.checked_sub(fee_bps)?;
     let amount_in_adj = amount_in.checked_mul(fee_adj)?;
     let numerator = amount_in_adj.checked_mul(reserve_b)?;
-    let denom = reserve_a.checked_mul(10_000i128)?.checked_add(amount_in_adj)?;
+    let denom = reserve_a
+        .checked_mul(10_000i128)?
+        .checked_add(amount_in_adj)?;
     if denom == 0 {
         return None;
     }
@@ -219,8 +221,8 @@ fn edge_large_amount_in_bounded() {
 #[test]
 fn edge_fee_monotonicity_at_boundaries() {
     let (ra, rb, amt) = (10_000i128, 10_000i128, 1_000i128);
-    let out_0    = swap_out(ra, rb, amt, 0).unwrap();
-    let out_30   = swap_out(ra, rb, amt, 30).unwrap();
+    let out_0 = swap_out(ra, rb, amt, 0).unwrap();
+    let out_30 = swap_out(ra, rb, amt, 30).unwrap();
     let out_9999 = swap_out(ra, rb, amt, 9_999).unwrap();
     assert!(out_0 >= out_30);
     assert!(out_30 >= out_9999);
@@ -231,6 +233,6 @@ fn edge_k_monotonic_zero_fee() {
     let (ra, rb, amt, fee) = (100_000i128, 200_000i128, 50_000i128, 0i128);
     let out = swap_out(ra, rb, amt, fee).unwrap();
     let k_before = ra * rb;
-    let k_after  = (ra + amt) * (rb - out);
+    let k_after = (ra + amt) * (rb - out);
     assert!(k_after >= k_before, "k decreased with zero fee");
 }

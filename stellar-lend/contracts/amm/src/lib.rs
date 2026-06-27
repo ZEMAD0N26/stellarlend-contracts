@@ -1,14 +1,16 @@
 #![no_std]
 
-pub mod math;
 pub mod liquidity_math;
+pub mod math;
 
-#[cfg(test)]
-mod sqrt_precision_test;
 #[cfg(test)]
 mod flash_swap_test;
 #[cfg(test)]
 mod fee_accrual_test;
+#[cfg(test)]
+mod mint_shares_proptest;
+#[cfg(test)]
+mod sqrt_precision_test;
 
 use soroban_sdk::{contract, contractimpl, Address, Bytes, Env};
 
@@ -85,9 +87,7 @@ impl AmmContract {
             .get(&KEY_FLASH_ACTIVE)
             .unwrap_or(false);
         if active {
-            panic!(
-                "ReentrantFlashSwap: pool mutation blocked while flash-swap is in flight"
-            );
+            panic!("ReentrantFlashSwap: pool mutation blocked while flash-swap is in flight");
         }
     }
 
@@ -205,7 +205,9 @@ impl AmmContract {
         // reserve_out is A, reserve_in is B
         let numerator = amount_in_with_fee.checked_mul(ra).expect("overflow");
         let denom_part = rb.checked_mul(10_000_i128).expect("overflow");
-        let denominator = denom_part.checked_add(amount_in_with_fee).expect("overflow");
+        let denominator = denom_part
+            .checked_add(amount_in_with_fee)
+            .expect("overflow");
 
         let amount_out = numerator / denominator; // floor — pool never over-pays
 
@@ -267,12 +269,7 @@ impl AmmContract {
     ///                  `repay_flash_swap` from a follow-up transaction
     ///                  operation.  The value is bound to a local to
     ///                  keep it in the parameter surface.
-    pub fn flash_swap_a_for_b(
-        env: Env,
-        amount_out: i128,
-        fee_bps: i128,
-        params: Bytes,
-    ) -> i128 {
+    pub fn flash_swap_a_for_b(env: Env, amount_out: i128, fee_bps: i128, params: Bytes) -> i128 {
         // `params` is reserved for a future callback variant.  Bound to
         // a local so the parameter is used (no dead-binding lint).
         let _ = params;
@@ -336,23 +333,17 @@ impl AmmContract {
             panic!("repay_flash_swap: no flash swap in progress");
         }
 
-        let ra: i128 = env
-            .storage()
-            .persistent()
-            .get(&KEY_RES_A)
-            .unwrap_or(0);
-        let rb: i128 = env
-            .storage()
-            .persistent()
-            .get(&KEY_RES_B)
-            .unwrap_or(0);
+        let ra: i128 = env.storage().persistent().get(&KEY_RES_A).unwrap_or(0);
+        let rb: i128 = env.storage().persistent().get(&KEY_RES_B).unwrap_or(0);
         let k_before: i128 = env
             .storage()
             .persistent()
             .get(&KEY_K_BEFORE)
             .expect("repay_flash_swap: k_before missing");
 
-        let new_ra: i128 = ra.checked_add(amount_in).expect("repay_flash_swap overflow");
+        let new_ra: i128 = ra
+            .checked_add(amount_in)
+            .expect("repay_flash_swap overflow");
 
         // ---- Verify-k: k must not have decreased. ----
         // After the optimistic debit, reserve_b holds `rb` (already
@@ -476,14 +467,11 @@ fn compute_fee(amount_in: i128, fee_bps: i128) -> i128 {
 /// the forward swap (callers commonly reach for it from
 /// `swap_a_for_b(fee_bps)`).
 #[cfg(test)]
-pub(crate) fn inverse_swap_in(
-    ra: i128,
-    rb: i128,
-    amount_out: i128,
-    _fee_bps: i128,
-) -> i128 {
+pub(crate) fn inverse_swap_in(ra: i128, rb: i128, amount_out: i128, _fee_bps: i128) -> i128 {
     let rb_minus_out = rb.checked_sub(amount_out).expect("amount_out >= rb");
-    let numerator = ra.checked_mul(amount_out).expect("inverse_swap_in overflow");
+    let numerator = ra
+        .checked_mul(amount_out)
+        .expect("inverse_swap_in overflow");
     // ceil(numerator / rb_minus_out) — round up so we never under-pay.
     (numerator + rb_minus_out - 1) / rb_minus_out
 }
@@ -521,7 +509,11 @@ mod test {
                     assert!(
                         k_after >= k_before,
                         "k decreased: ra={}, rb={}, amt={}, k_before={}, k_after={}",
-                        ra, rb, amt, k_before, k_after
+                        ra,
+                        rb,
+                        amt,
+                        k_before,
+                        k_after
                     );
                 }
             }

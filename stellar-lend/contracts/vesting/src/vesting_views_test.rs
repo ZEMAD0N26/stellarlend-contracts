@@ -52,7 +52,9 @@ fn total_locked_tracks_multiple_grants_after_claim() {
 
     assert_eq!(contract.total_locked(), 2300);
 
-    let claimed = contract.claim("alice", 1500).expect("claim should not error");
+    let claimed = contract
+        .claim("alice", 1500)
+        .expect("claim should not error");
     assert_eq!(claimed, 1000);
     assert_eq!(contract.balance_of("alice"), 1000);
     assert_eq!(contract.total_locked(), 1300);

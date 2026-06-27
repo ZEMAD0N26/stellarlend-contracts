@@ -1,5 +1,6 @@
 #[cfg(test)]
-mod revoke_split_test;use std::collections::HashMap;
+mod revoke_split_test;
+use std::collections::HashMap;
 
 /// Error type returned by admin-gated and pause-gated operations.
 #[derive(Debug, Clone, PartialEq, Eq)]

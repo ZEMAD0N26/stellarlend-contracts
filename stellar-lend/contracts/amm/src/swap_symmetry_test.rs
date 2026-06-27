@@ -84,7 +84,8 @@ fn test_round_trip_trader_does_not_profit() {
     assert!(
         a_back <= start_a,
         "round-trip profit impossible: started={}, ended={}",
-        start_a, a_back
+        start_a,
+        a_back
     );
 }
 
@@ -97,7 +98,10 @@ fn test_round_trip_k_monotonic() {
     assert!(ra1 * rb1 >= k_start);
     client.swap_b_for_a(&b_out, &30);
     let (ra2, rb2) = client.get_reserves();
-    assert!(ra2 * rb2 >= k_start, "k must stay >= initial after round-trip");
+    assert!(
+        ra2 * rb2 >= k_start,
+        "k must stay >= initial after round-trip"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +157,10 @@ fn test_swap_b_for_a_zero_fee() {
     let out_zero_fee = client.swap_b_for_a(&1_000, &0);
     let (_env2, client2) = setup(10_000, 10_000);
     let out_with_fee = client2.swap_b_for_a(&1_000, &30);
-    assert!(out_zero_fee >= out_with_fee, "zero-fee output must be >= fee output");
+    assert!(
+        out_zero_fee >= out_with_fee,
+        "zero-fee output must be >= fee output"
+    );
 }
 
 #[test]
@@ -195,7 +202,11 @@ fn fuzz_swap_b_for_a_k_monotonic() {
                 assert!(
                     k_after >= k_before,
                     "k decreased: ra={}, rb={}, amt={}, k_before={}, k_after={}",
-                    ra, rb, amt, k_before, k_after
+                    ra,
+                    rb,
+                    amt,
+                    k_before,
+                    k_after
                 );
             }
         }

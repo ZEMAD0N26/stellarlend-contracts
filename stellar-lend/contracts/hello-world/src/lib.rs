@@ -53,11 +53,11 @@ pub mod withdraw;
 // mod twap_tests;
 
 #[cfg(test)]
-mod twap_tests;
-#[cfg(test)]
 mod twap_eviction_test;
 #[cfg(test)]
 mod twap_fallback_event_test;
+#[cfg(test)]
+mod twap_tests;
 
 #[cfg(test)]
 mod bridge_fee_test;

@@ -49,12 +49,16 @@ pub fn calculate_mint_shares(
     reserve_1: i128,
 ) -> Result<(i128, i128), LiquidityMathError> {
     if total_supply == 0 {
-        let product = amount_0.checked_mul(amount_1).ok_or(LiquidityMathError::Overflow)?;
+        let product = amount_0
+            .checked_mul(amount_1)
+            .ok_or(LiquidityMathError::Overflow)?;
         let liquidity = sqrt(product);
         if liquidity <= MINIMUM_LIQUIDITY {
             return Err(LiquidityMathError::InsufficientLiquidityMinted);
         }
-        let shares = liquidity.checked_sub(MINIMUM_LIQUIDITY).ok_or(LiquidityMathError::Overflow)?;
+        let shares = liquidity
+            .checked_sub(MINIMUM_LIQUIDITY)
+            .ok_or(LiquidityMathError::Overflow)?;
         Ok((shares, MINIMUM_LIQUIDITY))
     } else {
         if reserve_0 == 0 || reserve_1 == 0 {
@@ -106,42 +110,47 @@ mod tests {
 
     #[test]
     fn test_donation_attack_mitigation() {
-        // Scenario: 
+        // Scenario:
         // An attacker tries to steal a victim's deposit by inflating the LP share price.
-        
+
         // 1. Attacker makes the initial deposit with minimal amounts.
         // Since MINIMUM_LIQUIDITY is 1000, attacker deposits 1001 of each token.
         let attacker_amount_0 = 1001;
         let attacker_amount_1 = 1001;
         let result = calculate_mint_shares(0, attacker_amount_0, attacker_amount_1, 0, 0);
         let (attacker_shares, locked_shares) = result.unwrap();
-        
+
         assert_eq!(attacker_shares, 1); // sqrt(1001*1001) - 1000 = 1
         assert_eq!(locked_shares, 1000); // permanently locked
-        
+
         let total_supply = attacker_shares + locked_shares; // 1001
-        
+
         // 2. Attacker "donates" a large amount directly to the pool's reserves without minting shares.
         // This artificially inflates the value of a single share.
         let donation = 1_000_000;
         let reserve_0 = attacker_amount_0 + donation;
         let reserve_1 = attacker_amount_1 + donation;
-        
+
         // 3. Victim deposits a large amount of liquidity (e.g., 500,000 of each token).
         let victim_amount_0 = 500_000;
         let victim_amount_1 = 500_000;
-        
+
         let result = calculate_mint_shares(
-            total_supply, victim_amount_0, victim_amount_1, reserve_0, reserve_1
+            total_supply,
+            victim_amount_0,
+            victim_amount_1,
+            reserve_0,
+            reserve_1,
         );
         let (victim_shares, new_locked) = result.unwrap();
-        
+
         // Because of the locked minimum liquidity (total_supply = 1001 instead of 1),
         // the victim still receives a proportional amount of shares.
-        // shares = min(500,000 * 1001 / 1,001,001, ...) = 500
-        assert_eq!(victim_shares, 500);
+        // shares = min(500,000 * 1001 / 1,001,001, ...) = 499
+        // floor(500_500_000 / 1_001_001) = 499
+        assert_eq!(victim_shares, 499);
         assert_eq!(new_locked, 0);
-        
+
         // If MINIMUM_LIQUIDITY was 0, total_supply would be 1, reserve_0 would be 1_000_001.
         // victim_shares would be 500_000 * 1 / 1_000_001 = 0.
         // The attacker would then own 100% of the pool and steal the victim's 500k.

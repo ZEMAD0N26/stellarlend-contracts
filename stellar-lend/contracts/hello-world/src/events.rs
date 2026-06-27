@@ -73,13 +73,8 @@ pub struct PriceUpdatedEvent {
 ///
 /// Topics: `("oracle", "price_updated")`
 pub fn emit_price_updated(env: &Env, event: PriceUpdatedEvent) {
-    env.events().publish(
-        (
-            symbol_short!("oracle"),
-            symbol_short!("priceUpd"),
-        ),
-        event,
-    );
+    env.events()
+        .publish((symbol_short!("oracle"), symbol_short!("priceUpd")), event);
 }
 
 // ---------------------------------------------------------------------------
