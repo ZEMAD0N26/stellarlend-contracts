@@ -7,7 +7,7 @@ fn test_liquidation_exact_coverage_no_bad_debt() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, LendingContract);
+    let contract_id = env.register(LendingContract, ());
     let client = LendingContractClient::new(&env, &contract_id);
 
     // Initial setup (Mock initializations matching your workspace helpers)
@@ -21,7 +21,7 @@ fn test_liquidation_accumulates_bad_debt_on_shortfall() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, LendingContract);
+    let contract_id = env.register(LendingContract, ());
     let client = LendingContractClient::new(&env, &contract_id);
     
     // Prefixed with underscores to explicitly satisfy Clippy's unused variable rules
