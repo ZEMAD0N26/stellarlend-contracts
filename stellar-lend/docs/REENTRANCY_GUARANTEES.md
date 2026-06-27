@@ -24,7 +24,9 @@ The guard uses a simple boolean flag in Soroban instance storage:
 ## Covered Operations
 
 The `require_no_active_flash_loan` guard is enforced on all state-mutating
-operations:
+operations, and `liquidate` additionally wraps its body in the reentrancy lock
+so the same transaction cannot re-enter the entrypoint from a flash-loan
+callback or another internal call path:
 
 - `deposit`
 - `withdraw`
