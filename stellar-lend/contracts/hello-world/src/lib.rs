@@ -58,6 +58,8 @@ mod amm_integration_test;
 
 #[cfg(test)]
 mod cross_asset_decimals_test;
+#[cfg(test)]
+mod rate_clamp_test;
 
 // Legacy test suite currently mismatches contract API and is excluded from CI compile.
 // #[cfg(test)]
