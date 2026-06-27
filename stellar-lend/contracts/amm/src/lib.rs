@@ -1,5 +1,11 @@
 #![no_std]
 
+pub mod math;
+pub mod liquidity_math;
+
+#[cfg(test)]
+mod sqrt_precision_test;
+
 use soroban_sdk::{contract, contractimpl, Address, Env};
 
 #[contract]
