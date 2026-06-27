@@ -19,6 +19,27 @@ use soroban_sdk::{contract, contractimpl, Address, Bytes, Env};
 const KEY_RES_A: (&str, &str) = ("pool", "a");
 const KEY_RES_B: (&str, &str) = ("pool", "b");
 
+// Price-impact guard.
+//
+// `KEY_MAX_IMPACT_BPS` stores the admin-configured maximum price-impact in
+// basis points (e.g. 500 = 5 %).  The sentinel `u32::MAX` (0xFFFF_FFFF)
+// disables the guard entirely for backward compatibility — any swap is
+// allowed when the guard is off.
+//
+// Spot price is represented as `reserve_b / reserve_a` (units of B per A).
+// A swap A→B increases reserve_a and decreases reserve_b, which lowers the
+// spot price.  The relative move is:
+//
+//   impact_bps = (price_before - price_after) * 10_000 / price_before
+//              = (rb/ra  −  rb_after/ra_after) * 10_000 / (rb/ra)
+//              = (1 − (rb_after * ra) / (rb * ra_after)) * 10_000
+//
+// Everything is computed in integer arithmetic using checked mul/div to
+// avoid overflow.
+const KEY_MAX_IMPACT_BPS: (&str, &str) = ("pool", "max_impact_bps");
+/// Sentinel value that disables the price-impact guard.
+pub const IMPACT_GUARD_DISABLED: u32 = u32::MAX;
+
 // New keys for the flash-swap feature.
 //
 // `KEY_FLASH_ACTIVE` is the protocol-wide reentrancy guard: while a flash
@@ -55,6 +76,34 @@ impl AmmContract {
         Self::assert_no_active_flash_swap(&env);
         env.storage().persistent().set(&KEY_RES_A, &a);
         env.storage().persistent().set(&KEY_RES_B, &b);
+    }
+
+    /// Set the maximum per-swap price impact in basis points.
+    ///
+    /// A swap A→B that would move the spot price (`reserve_b / reserve_a`)
+    /// by more than `max_impact_bps / 10_000` is rejected with a panic,
+    /// rolling back all state changes atomically.
+    ///
+    /// Pass [`IMPACT_GUARD_DISABLED`] (`u32::MAX`) to disable the guard
+    /// and allow swaps of any size (backward-compatible default).
+    ///
+    /// # Arguments
+    /// * `_admin`         — caller address (auth checked by the caller in
+    ///                      production; kept in signature for future ACL).
+    /// * `max_impact_bps` — maximum impact in BPS, or `IMPACT_GUARD_DISABLED`.
+    pub fn set_max_impact_bps(env: Env, _admin: Address, max_impact_bps: u32) {
+        env.storage()
+            .persistent()
+            .set(&KEY_MAX_IMPACT_BPS, &max_impact_bps);
+    }
+
+    /// Return the current max-impact bound in BPS, or [`IMPACT_GUARD_DISABLED`]
+    /// if it has never been set.
+    pub fn get_max_impact_bps(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&KEY_MAX_IMPACT_BPS)
+            .unwrap_or(IMPACT_GUARD_DISABLED)
     }
 
     fn assert_no_active_flash_swap(env: &Env) {
@@ -129,6 +178,36 @@ impl AmmContract {
         let new_ra = ra.checked_add(amount_in).expect("overflow");
         let new_rb = rb.checked_sub(amount_out).expect("underflow");
         assert_k_monotonic(ra, rb, new_ra, new_rb, true);
+
+        // ---- Price-impact guard ----
+        // Spot price before  = rb  / ra   (units of B per A).
+        // Spot price after   = new_rb / new_ra.
+        // Relative impact (BPS) = (1 - new_rb * ra / (rb * new_ra)) * 10_000.
+        // We reject if impact_bps > max_impact_bps.
+        let max_impact: u32 = env
+            .storage()
+            .persistent()
+            .get(&KEY_MAX_IMPACT_BPS)
+            .unwrap_or(IMPACT_GUARD_DISABLED);
+        if max_impact != IMPACT_GUARD_DISABLED {
+            // Numerator of the "price ratio after / before":
+            //   ratio_num = new_rb * ra
+            //   ratio_den = rb     * new_ra
+            // impact_bps = (1 - ratio_num / ratio_den) * 10_000
+            //            = (ratio_den - ratio_num) * 10_000 / ratio_den
+            let ratio_num = new_rb.checked_mul(ra).expect("impact overflow");
+            let ratio_den = rb.checked_mul(new_ra).expect("impact overflow");
+            let impact_bps = (ratio_den - ratio_num)
+                .checked_mul(10_000)
+                .expect("impact overflow")
+                / ratio_den;
+            if impact_bps > max_impact as i128 {
+                panic!(
+                    "PriceImpactExceeded: impact_bps={}, max={}",
+                    impact_bps, max_impact
+                );
+            }
+        }
 
         env.storage().persistent().set(&KEY_RES_A, &new_ra);
         env.storage().persistent().set(&KEY_RES_B, &new_rb);
@@ -417,6 +496,9 @@ pub(crate) fn inverse_swap_in(
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod swap_bounds_proptest;
+
+#[cfg(test)]
+mod price_impact_test;
 
 #[cfg(test)]
 mod test {
