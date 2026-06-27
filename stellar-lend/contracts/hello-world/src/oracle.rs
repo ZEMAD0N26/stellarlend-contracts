@@ -10,6 +10,11 @@
 //!    time-weighted average price from the on-chain AMM pool reserves.
 //! 4. **Configured fallback oracle**: legacy fallback oracle address support.
 //!
+//! `get_pool_twap_price` exposes step 3's underlying AMM TWAP value directly
+//! as a read-only view (returning `None` rather than panicking when the
+//! window isn't covered yet), so integrators/monitors can inspect the
+//! fallback without flying blind during a primary-feed outage.
+//!
 //! ## Safety
 //! - Price deviation between consecutive updates is bounded (default ±5%).
 //! - Staleness threshold defaults to 1 hour; configurable by admin.
@@ -444,6 +449,33 @@ fn try_twap_fallback(env: &Env, asset: &Address) -> Result<i128, OracleError> {
 
     cache_price(env, asset, price);
     Ok(price)
+}
+
+/// Read-only view exposing the same AMM TWAP fallback price that
+/// [`get_price`]'s resolution order would fall back to for `asset`, at the
+/// AMM accumulator's own native scale (`TWAP_PRICE_SCALE`, i.e. 1e18 — the
+/// same scale documented on `amm_twap::get_twap`). This is the *pre*-rescale
+/// value; `try_twap_fallback`'s further division to 6 decimals for the
+/// protocol's `i128` price format is intentionally not applied here, so
+/// integrators/monitors see exactly what the AMM accumulator reports.
+///
+/// Calls the identical `amm_twap::get_twap` code path `try_twap_fallback`
+/// uses internally — this is not a reimplementation.
+///
+/// Returns `None` (never panics) when no snapshot covers the requested
+/// `window_secs`: the pool has no recorded state yet, there isn't enough
+/// TWAP history for the window, or `window_secs` is below
+/// `amm_twap::MIN_WINDOW_SECS`. Integrators/monitors should treat `None` as
+/// "the fallback is not currently usable for this window" rather than
+/// retrying — it means the data genuinely isn't there yet.
+///
+/// Pure read: never mutates contract state (unlike `get_price`, which may
+/// cache the resolved price).
+pub fn get_pool_twap_price(env: &Env, asset: &Address, window_secs: u64) -> Option<u128> {
+    if !amm_twap::has_window_coverage(env, asset, window_secs) {
+        return None;
+    }
+    Some(amm_twap::get_twap(env, asset, window_secs))
 }
 
 /// Get price from the configured legacy fallback oracle feed.

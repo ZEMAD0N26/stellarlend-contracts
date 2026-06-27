@@ -320,3 +320,49 @@ fn find_snapshot_at_or_before(snaps: &Vec<TwapSnapshot>, target_ts: u64) -> Opti
 pub fn get_pool_state(env: &Env, asset: &Address) -> Option<TwapPoolState> {
     env.storage().persistent().get(&twap_state_key(asset))
 }
+
+/// Returns `true` if `get_twap(env, asset, window_secs)` would succeed
+/// (i.e. not panic) for the given window, without performing the actual
+/// TWAP calculation.
+///
+/// This mirrors every panic/assert precondition inside `get_twap` exactly,
+/// so callers that need a non-panicking sentinel (e.g. a read-only view
+/// intended for monitoring/integration, rather than a settlement path that
+/// is fine with hard-aborting) can check coverage first and only call
+/// `get_twap` when this returns `true`.
+pub fn has_window_coverage(env: &Env, asset: &Address, window_secs: u64) -> bool {
+    if window_secs < MIN_WINDOW_SECS {
+        return false;
+    }
+
+    let state_key = twap_state_key(asset);
+    let current_state: TwapPoolState = match env.storage().persistent().get(&state_key) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    let now: u64 = env.ledger().timestamp();
+    let target_start = now.saturating_sub(window_secs);
+
+    let snaps_key = twap_snaps_key(asset);
+    let snaps: Vec<TwapSnapshot> = env
+        .storage()
+        .persistent()
+        .get(&snaps_key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    match find_snapshot_at_or_before(&snaps, target_start) {
+        // Mirrors: assert!(actual_window > 0, "zero-length TWAP window");
+        Some(start_snap) => now.saturating_sub(start_snap.timestamp) > 0,
+        // Mirrors: assert!(actual_window >= MIN_WINDOW_SECS, "insufficient TWAP history ...");
+        // get_twap falls back to current_state.last_timestamp (not `now`) when
+        // there's no snapshot at all yet -- match that exactly.
+        None => {
+            let earliest_ts = snaps
+                .first()
+                .map(|s| s.timestamp)
+                .unwrap_or(current_state.last_timestamp);
+            now.saturating_sub(earliest_ts) >= MIN_WINDOW_SECS
+        }
+    }
+}
