@@ -4,15 +4,15 @@ pub mod liquidity_math;
 pub mod math;
 
 #[cfg(test)]
-mod fee_accrual_test;
-#[cfg(test)]
-mod flash_swap_test;
-#[cfg(test)]
 mod fee_accrual_overflow_test;
+#[cfg(test)]
+mod fee_accrual_test;
 #[cfg(test)]
 mod flash_swap_atomicity_test;
 #[cfg(test)]
 mod flash_swap_protocol_doctest;
+#[cfg(test)]
+mod flash_swap_test;
 #[cfg(test)]
 mod mint_shares_proptest;
 #[cfg(test)]
