@@ -108,6 +108,8 @@ const DEFAULT_DEPOSIT_CAP: i128 = 1_000_000_000_000;
 pub(crate) const HEALTH_FACTOR_SCALE: i128 = 10_000;
 const HEALTH_FACTOR_NO_DEBT: i128 = 100_000_000;
 pub const LIQUIDATION_THRESHOLD_BPS: i128 = 8000;
+/// Maximum fraction of debt that can be repaid in a single liquidation call (50 %).
+pub const CLOSE_FACTOR: i128 = 5000;
 const DEFAULT_ORACLE_MAX_AGE_SECS: u64 = 3600;
 const ORACLE_SIGNATURE_DOMAIN: &[u8] = b"StellarLendOracle";
 const BPS_DENOM: i128 = 10_000;
@@ -1257,10 +1259,9 @@ impl LendingContract {
             }
 
             // Close-factor cap: floor rounding.
-            // debt * 5000 / 10000 — rounding down means the liquidator can extinguish
+            // debt * CLOSE_FACTOR / BPS_DENOM — rounding down means the liquidator can extinguish
             // *at most* 50 % of debt, and possibly slightly less.  This is conservative:
             // the protocol retains more liquidation opportunities.
-            const CLOSE_FACTOR: i128 = 5000;
             let max_repay = math::checked_mul_div_floor(debt, CLOSE_FACTOR, BPS_DENOM)
                 .map_err(|_| LendingError::Overflow)?;
             let actual_repay = if amount > max_repay {
