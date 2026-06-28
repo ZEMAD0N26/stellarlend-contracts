@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod liquidate_pause_test {
-    use crate::{EmergencyState, LendingContract, LendingContractClient, PauseType};
+    use crate::{
+        debt::DebtPosition, DataKey, EmergencyState, LendingContract, LendingContractClient,
+        PauseType,
+    };
     use soroban_sdk::{testutils::Address as _, Address, Env};
 
     fn setup() -> (
@@ -25,9 +28,19 @@ mod liquidate_pause_test {
         // configure a simple asset
         let asset = Address::generate(&env);
         client.set_asset_params(&admin, &asset, &7500, &8000, &1_000_000_000_000i128);
-        // make borrower unhealthy: deposit 100, borrow 200
-        client.deposit(&borrower, &100);
-        client.borrow(&borrower, &200);
+        // make borrower unhealthy via direct state seeding
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Collateral(borrower.clone()), &100i128);
+            env.storage().persistent().set(
+                &DataKey::Debt(borrower.clone()),
+                &DebtPosition {
+                    principal: 200,
+                    last_update: env.ledger().timestamp(),
+                },
+            );
+        });
         (
             env,
             client,
