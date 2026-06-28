@@ -287,6 +287,7 @@ pub enum LendingError {
     StaleOracleTimestamp = 5002,
     OraclePubkeyNotSet = 5003,
     MaxMoveBpsExceeded = 5004,
+    OracleReplay = 5005,
     /// The asset has not been configured via set_asset_params.
     AssetNotConfigured = 3001,
     /// Oracle price record is missing for the requested asset.
@@ -495,6 +496,16 @@ impl LendingContract {
         let now = env.ledger().timestamp();
         if timestamp > now || now > timestamp.saturating_add(DEFAULT_ORACLE_MAX_AGE_SECS) {
             return Err(LendingError::StaleOracleTimestamp);
+        }
+        // Monotonic timestamp enforcement
+        if let Some(last) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PriceRecord>(&DataKey::OraclePrice(asset.clone()))
+        {
+            if timestamp <= last.timestamp {
+                return Err(LendingError::OracleReplay);
+            }
         }
 
         let oracle_pubkey: BytesN<32> = env

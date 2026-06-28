@@ -86,10 +86,16 @@ pub fn load_asset_params(env: &Env, asset: &Address) -> Option<AssetParams> {
 /// Returns [`LendingError::PriceFeedNotFound`] if no price has been stored for
 /// this asset.
 pub fn get_price_for_asset(env: &Env, asset: &Address) -> Result<PriceRecord, LendingError> {
-    env.storage()
+    let record = env
+        .storage()
         .persistent()
         .get(&DataKey::OraclePrice(asset.clone()))
-        .ok_or(LendingError::PriceFeedNotFound)
+        .ok_or(LendingError::PriceFeedNotFound)?;
+    let now = env.ledger().timestamp();
+    if now > record.timestamp.saturating_add(DEFAULT_ORACLE_MAX_AGE_SECS) {
+        return Err(LendingError::StaleOracleTimestamp);
+    }
+    Ok(record)
 }
 
 fn add_to_user_collateral_list(env: &Env, user: &Address, asset: &Address) {
