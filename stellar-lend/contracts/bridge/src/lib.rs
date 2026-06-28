@@ -253,6 +253,9 @@ mod epoch_monotonicity_proptest;
 mod window_guard_test;
 
 #[cfg(test)]
+mod window_tuning_doc_test;
+
+#[cfg(test)]
 mod validatorset_proptest;
 
 #[cfg(test)]
