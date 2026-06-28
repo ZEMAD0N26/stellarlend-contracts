@@ -1,8 +1,8 @@
-use crate::{DataKey, LendingContract, LendingContractClient, LendingError, MockAsset};
 use crate::test::{chrono_keypair, sign_oracle_update};
+use crate::{DataKey, LendingContract, LendingContractClient, LendingError, MockAsset};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    Address, Env, BytesN,
+    Address, BytesN, Env,
 };
 
 fn setup() -> (Env, LendingContractClient<'static>, Address, Address) {

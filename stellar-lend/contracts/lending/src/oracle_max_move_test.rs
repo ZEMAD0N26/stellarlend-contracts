@@ -1,5 +1,5 @@
-use crate::{LendingContract, LendingContractClient, LendingError, MockAsset};
 use crate::test::{chrono_keypair, sign_oracle_update};
+use crate::{LendingContract, LendingContractClient, LendingError, MockAsset};
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
 fn setup() -> (Env, LendingContractClient<'static>, Address) {
@@ -62,7 +62,7 @@ fn test_first_price_exempt_from_move_cap() {
     let asset = env.register(MockAsset, ());
     // Set a very tight cap
     client.set_max_move_bps(&1i128).unwrap(); // 0.01 %
-    // First price set should succeed regardless of cap
+                                              // First price set should succeed regardless of cap
     let res = do_set_price(&env, &client, &admin, &asset, 1_000_000i128);
     assert!(res.is_ok(), "first price must be exempt: {:?}", res);
 }
@@ -81,7 +81,11 @@ fn test_up_move_within_cap_succeeds() {
     client.set_max_move_bps(&1000i128).unwrap();
     // +5% = 10_500 → 500 bps, within cap
     let res = do_set_price(&env, &client, &admin, &asset, 10_500i128);
-    assert!(res.is_ok(), "5% up-move within 10% cap must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "5% up-move within 10% cap must succeed: {:?}",
+        res
+    );
 }
 
 #[test]
@@ -120,7 +124,7 @@ fn test_large_up_move_fails() {
     let asset = env.register(MockAsset, ());
     do_set_price(&env, &client, &admin, &asset, 1_000i128).unwrap();
     client.set_max_move_bps(&500i128).unwrap(); // 5%
-    // 10× jump → 900% up
+                                                // 10× jump → 900% up
     let res = do_set_price(&env, &client, &admin, &asset, 10_000i128);
     assert!(res.is_err());
     assert_eq!(res.err().unwrap(), Ok(LendingError::MaxMoveBpsExceeded));
@@ -136,9 +140,13 @@ fn test_down_move_within_cap_succeeds() {
     let asset = env.register(MockAsset, ());
     do_set_price(&env, &client, &admin, &asset, 10_000i128).unwrap();
     client.set_max_move_bps(&1000i128).unwrap(); // 10%
-    // -5% → 500 bps
+                                                 // -5% → 500 bps
     let res = do_set_price(&env, &client, &admin, &asset, 9_500i128);
-    assert!(res.is_ok(), "5% down-move within 10% cap must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "5% down-move within 10% cap must succeed: {:?}",
+        res
+    );
 }
 
 #[test]
@@ -147,7 +155,7 @@ fn test_down_move_at_exact_cap_succeeds() {
     let asset = env.register(MockAsset, ());
     do_set_price(&env, &client, &admin, &asset, 10_000i128).unwrap();
     client.set_max_move_bps(&1000i128).unwrap(); // 10%
-    // -10% exactly = 9_000 → 1000 bps == cap
+                                                 // -10% exactly = 9_000 → 1000 bps == cap
     let res = do_set_price(&env, &client, &admin, &asset, 9_000i128);
     assert!(res.is_ok(), "exact-cap down-move must succeed: {:?}", res);
 }
@@ -158,7 +166,7 @@ fn test_down_move_one_bps_over_cap_fails() {
     let asset = env.register(MockAsset, ());
     do_set_price(&env, &client, &admin, &asset, 10_000i128).unwrap();
     client.set_max_move_bps(&1000i128).unwrap(); // 10%
-    // -10.01% → price = 8_999 → delta=1001, move_bps=1001 > 1000
+                                                 // -10.01% → price = 8_999 → delta=1001, move_bps=1001 > 1000
     let res = do_set_price(&env, &client, &admin, &asset, 8_999i128);
     assert!(res.is_err(), "1 bps over cap (down) must fail");
     assert_eq!(res.err().unwrap(), Ok(LendingError::MaxMoveBpsExceeded));
@@ -170,7 +178,7 @@ fn test_large_down_move_fails() {
     let asset = env.register(MockAsset, ());
     do_set_price(&env, &client, &admin, &asset, 100_000i128).unwrap();
     client.set_max_move_bps(&500i128).unwrap(); // 5%
-    // -90% drop
+                                                // -90% drop
     let res = do_set_price(&env, &client, &admin, &asset, 10_000i128);
     assert!(res.is_err());
     assert_eq!(res.err().unwrap(), Ok(LendingError::MaxMoveBpsExceeded));
