@@ -72,6 +72,8 @@ mod property_invariants_test;
 #[cfg(test)]
 mod rate_cache_test;
 #[cfg(test)]
+mod rate_hysteresis_test;
+#[cfg(test)]
 mod repay_debt_floor_test;
 #[cfg(test)]
 mod repay_overpay_test;
