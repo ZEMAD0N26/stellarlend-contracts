@@ -11,21 +11,37 @@ pub struct ValidatorSet {
 }
 
 impl ValidatorSet {
+    /// Returns the effective validator count used for quorum decisions.
+    ///
+    /// Duplicate byte-encoded keys collapse to a single logical validator so a
+    /// malformed set cannot silently raise the quorum threshold by repeating the
+    /// same public key multiple times.
     pub fn len(&self) -> usize {
-        self.validators.len()
+        self.validators
+            .iter()
+            .map(|validator| validator.as_slice())
+            .collect::<HashSet<_>>()
+            .len()
     }
 
+    /// Returns the strict supermajority quorum threshold for this set.
+    ///
+    /// The threshold is computed from the deduplicated validator count exposed
+    /// by [`ValidatorSet::len`], so repeated keys never inflate the required
+    /// number of unique signatures.
     pub fn threshold(&self) -> usize {
         // Supermajority: > 2/3 of validators
         let n = self.len();
         (n * 2) / 3 + 1
     }
 
+    /// Returns `true` when `pk` is present anywhere in the raw validator list.
     pub fn contains_pk(&self, pk: &PublicKey) -> bool {
         let b = pk.to_bytes();
         self.validators.iter().any(|v| v.as_slice() == b.as_ref())
     }
 
+    /// Returns the raw byte-encoded validator list in storage order.
     pub fn to_bytes_vec(&self) -> Vec<Vec<u8>> {
         self.validators.clone()
     }
@@ -210,6 +226,9 @@ mod inbound_cap_test;
 
 #[cfg(test)]
 mod epoch_monotonicity_proptest;
+
+#[cfg(test)]
+mod validatorset_proptest;
 
 #[cfg(test)]
 mod tests {
