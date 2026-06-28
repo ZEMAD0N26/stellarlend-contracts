@@ -503,7 +503,8 @@ pub fn checked_mul_div_ceil(a: i128, b: i128, c: i128) -> Result<i128, MathError
 
 #[cfg(test)]
 mod tests {
-    use super::*; use proptest::prelude::*;
+    use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_compute_compound_interest_basic() {
