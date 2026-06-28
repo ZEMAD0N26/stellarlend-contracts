@@ -11,8 +11,15 @@
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     // Updated
-contract, contractimpl, testutils::Address as _, Address, Bytes, Env, IntoVal,
-    Symbol, Val,
+    contract,
+    contractimpl,
+    testutils::Address as _,
+    Address,
+    Bytes,
+    Env,
+    IntoVal,
+    Symbol,
+    Val,
 };
 
 use stellarlend_lending::{DataKey, LendingContract, LendingContractClient};
@@ -375,7 +382,7 @@ fn test_operations_resume_after_blocked_reentry() {
 
     // Subsequent deposit should succeed (not blocked by stale FlashActive).
     let user = Address::generate(&env);
-   let _deposit_result = client.try_deposit(&user, &500_i128);
+    let _deposit_result = client.try_deposit(&user, &500_i128);
     // The deposit may fail for other reasons (e.g., no token transfer in test),
     // but it must NOT fail with FlashLoanReentrancy.  If FlashActive were stuck,
     // this would panic with "FlashLoanReentrancy" and try_deposit would return
