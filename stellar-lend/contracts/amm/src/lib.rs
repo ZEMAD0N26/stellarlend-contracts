@@ -6,6 +6,8 @@ pub mod math;
 #[cfg(test)]
 mod flash_swap_test;
 #[cfg(test)]
+mod flash_swap_protocol_doctest;
+#[cfg(test)]
 mod fee_accrual_test;
 #[cfg(test)]
 mod mint_shares_proptest;
@@ -80,6 +82,17 @@ impl AmmContract {
         env.storage().persistent().set(&KEY_FEE_B, &0_i128);
     }
 
+    /// Reentrancy guard — panics if a flash swap is currently in flight.
+    ///
+    /// Called by `init_pool`, `add_liquidity`, `remove_liquidity`,
+    /// `swap_a_for_b`, and a nested `flash_swap_a_for_b` before touching
+    /// storage.
+    ///
+    /// # Panics
+    /// `"ReentrantFlashSwap: pool mutation blocked while flash-swap is in flight"`
+    /// when `KEY_FLASH_ACTIVE == true`.
+    ///
+    /// See: [FLASH_SWAP_PROTOCOL.md §Reentrancy Guard](../FLASH_SWAP_PROTOCOL.md)
     fn assert_no_active_flash_swap(env: &Env) {
         let active: bool = env
             .storage()
@@ -269,6 +282,18 @@ impl AmmContract {
     ///                  `repay_flash_swap` from a follow-up transaction
     ///                  operation.  The value is bound to a local to
     ///                  keep it in the parameter surface.
+    ///
+    /// # Returns
+    /// `amount_out` — the number of asset-B units debited from the pool.
+    ///
+    /// # Panics
+    /// - `"ReentrantFlashSwap"` — a flash swap is already in flight.
+    /// - `"amount_out must be positive"` — `amount_out ≤ 0`.
+    /// - `"invalid fee_bps (must be in [0, 9999])"` — out-of-range fee.
+    /// - `"empty pool"` — either reserve is zero.
+    /// - `"Insufficient reserves: amount_out would drain reserve_b"` — `amount_out ≥ reserve_b`.
+    ///
+    /// See: [FLASH_SWAP_PROTOCOL.md §Call Sequence](../FLASH_SWAP_PROTOCOL.md)
     pub fn flash_swap_a_for_b(env: Env, amount_out: i128, fee_bps: i128, params: Bytes) -> i128 {
         // `params` is reserved for a future callback variant.  Bound to
         // a local so the parameter is used (no dead-binding lint).
@@ -318,8 +343,22 @@ impl AmmContract {
     /// the optimistic reserve debit) — leaving the pool exactly where it
     /// started.
     ///
+    /// The minimum `amount_in` that satisfies the invariant is:
+    /// ```text
+    /// amount_in_min = ⌈ reserve_a × amount_out / (reserve_b − amount_out) ⌉
+    /// ```
+    /// computed by [`inverse_swap_in`].
+    ///
     /// # Arguments
     /// * `amount_in` — units of asset A being repaid.  Must be `> 0`.
+    ///
+    /// # Panics
+    /// - `"repay_flash_swap: amount_in must be positive"` — `amount_in ≤ 0`.
+    /// - `"repay_flash_swap: no flash swap in progress"` — called outside a flash swap.
+    /// - `"Invariant violation: k decreased during flash-swap repayment"` — under-repayment;
+    ///   Soroban then rolls back all storage changes, including the Op-1 debit.
+    ///
+    /// See: [FLASH_SWAP_PROTOCOL.md §Verify-K Repay Invariant](../FLASH_SWAP_PROTOCOL.md)
     pub fn repay_flash_swap(env: Env, amount_in: i128) {
         if amount_in <= 0 {
             panic!("repay_flash_swap: amount_in must be positive");
@@ -371,10 +410,14 @@ impl AmmContract {
         (ra, rb)
     }
 
-    /// Read whether a flash-swap is currently in flight (between
-    /// `flash_swap_a_for_b` and the matching `repay_flash_swap`).
-    /// Useful for tests, off-chain monitoring, and front-ends that want
-    /// to expose pool lock-state.
+    /// Returns `true` while a flash swap is in flight — between the
+    /// [`flash_swap_a_for_b`](AmmContract::flash_swap_a_for_b) call and
+    /// the matching [`repay_flash_swap`](AmmContract::repay_flash_swap).
+    ///
+    /// Useful for off-chain monitoring, front-ends exposing pool lock-state,
+    /// and test assertions.  Read-only; not gated by the reentrancy guard.
+    ///
+    /// See: [FLASH_SWAP_PROTOCOL.md §Reentrancy Guard](../FLASH_SWAP_PROTOCOL.md)
     pub fn is_flash_active(env: Env) -> bool {
         env.storage()
             .instance()
@@ -466,6 +509,8 @@ fn compute_fee(amount_in: i128, fee_bps: i128) -> i128 {
 /// `fee_bps` is still supplied so the function's signature mirrors
 /// the forward swap (callers commonly reach for it from
 /// `swap_a_for_b(fee_bps)`).
+///
+/// See: [FLASH_SWAP_PROTOCOL.md §Minimum Repayment Formula](../FLASH_SWAP_PROTOCOL.md)
 #[cfg(test)]
 pub(crate) fn inverse_swap_in(ra: i128, rb: i128, amount_out: i128, _fee_bps: i128) -> i128 {
     let rb_minus_out = rb.checked_sub(amount_out).expect("amount_out >= rb");
