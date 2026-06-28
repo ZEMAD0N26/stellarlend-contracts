@@ -4,6 +4,9 @@ pub mod cross_asset;
 pub mod debt;
 pub mod math;
 pub mod rate_model;
+
+#[cfg(test)]
+mod rate_smoothing_proof_doctest;
 pub mod rounding_strategy;
 pub mod upgrade;
 

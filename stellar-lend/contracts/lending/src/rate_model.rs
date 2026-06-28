@@ -60,6 +60,54 @@ pub fn compute_borrow_rate(utilization_bps: i128, params: &RateParams) -> i128 {
         .min(params.rate_ceiling_bps)
 }
 
+/// Computes the next smoothed rate using an exponential moving average (EMA)
+/// approach. The rate moves toward the `target_rate` by a fraction determined
+/// by `smoothing_factor_bps` (where 10_000 = 100%).
+/// 
+/// The recurrence is:
+/// R_{t+1} = R_t + (R_{target} - R_t) * (smoothing_factor / 10000)
+/// 
+/// To ensure it converges and doesn't get stuck due to integer division truncation
+/// (saturation bound), it forces a minimum move of 1 bps if the target hasn't been reached,
+/// ensuring convergence without overshoot.
+pub fn compute_smoothed_rate(
+    current_rate: i128,
+    target_rate: i128,
+    smoothing_factor_bps: i128,
+) -> i128 {
+    let delta = target_rate.checked_sub(current_rate).unwrap();
+    let change = delta
+        .checked_mul(smoothing_factor_bps)
+        .unwrap()
+        .checked_div(BPS_DENOM)
+        .unwrap();
+
+    let mut next_rate = current_rate.checked_add(change).unwrap();
+
+    if change == 0 && delta != 0 {
+        if delta > 0 {
+            next_rate = current_rate.checked_add(1).unwrap();
+        } else {
+            next_rate = current_rate.checked_sub(1).unwrap();
+        }
+    }
+
+    next_rate
+}
+
+/// Updates the current rate towards the target rate given the current utilization.
+/// It computes the target rate using `compute_borrow_rate` and then applies
+/// `compute_smoothed_rate`.
+pub fn update_and_get_rate(
+    current_rate: i128,
+    utilization_bps: i128,
+    params: &RateParams,
+    smoothing_factor_bps: i128,
+) -> i128 {
+    let target_rate = compute_borrow_rate(utilization_bps, params);
+    compute_smoothed_rate(current_rate, target_rate, smoothing_factor_bps)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
