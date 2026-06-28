@@ -1358,6 +1358,8 @@ mod amm_pause_integration_test;
 #[cfg(test)]
 mod claim_reserves_test;
 
+#[cfg(test)]
+mod gov_can_vote_test;
 // mod governance_test;
 
 #[cfg(test)]
