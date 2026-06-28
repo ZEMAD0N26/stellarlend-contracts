@@ -92,6 +92,7 @@ These documents live alongside the contract source and are the authoritative ref
 - [Lending Contract Docs](../stellar-lend/contracts/lending/cross_asset.md)
 - [Lending Contract Docs](../stellar-lend/contracts/lending/views.md)
 - [Lending Contract Docs](../stellar-lend/contracts/lending/token_receiver.md)
+- [Liquidation Mechanics](../stellar-lend/contracts/lending/LIQUIDATION_MECHANICS.md)
 - [Lending Contract Docs](../stellar-lend/contracts/lending/emergency_shutdown.md)
 - [Repay Semantics](../stellar-lend/docs/REPAY_SEMANTICS.md)
 - [Reentrancy Guarantees](../stellar-lend/docs/REENTRANCY_GUARANTEES.md)

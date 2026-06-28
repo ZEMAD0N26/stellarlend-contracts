@@ -7,6 +7,9 @@ use soroban_sdk::{
 /// Minimum threshold delay in ledgers (7 days = ~604,800 seconds / 5 sec per ledger = ~120,960 ledgers)
 /// Using conservative estimate: 600,000 ledgers for 7 days
 const MIN_THRESHOLD_DELAY_LEDGERS: u32 = 600_000;
+/// Minimum signer-set change delay in ledgers — identical to the threshold-change delay
+/// so both governance levers share the same cooldown window (~7 days).
+const MIN_SIGNERS_DELAY_LEDGERS: u32 = MIN_THRESHOLD_DELAY_LEDGERS;
 /// Default proposal lifetime in ledgers (14 days at ~5 seconds per ledger).
 const DEFAULT_PROPOSAL_EXPIRY_LEDGERS: u32 = 1_200_000;
 
@@ -19,6 +22,8 @@ pub enum DataKey {
     Admin,
     /// Pending threshold change (new_threshold, eta_ledger)
     PendingThresholdChange,
+    /// Pending signer-set change (new_signers, eta_ledger)
+    PendingSignersChange,
     /// Ledger number when contract was initialized
     InitializedLedger,
     /// Monotonic proposal id counter
@@ -63,12 +68,27 @@ pub enum MultisigError {
     NotASigner = 1013,
     /// Quorum has not been reached (too few current-signer approvals)
     InsufficientApprovals = 1014,
+    /// No pending signer-set change is queued
+    NoQueuedSignersChange = 1015,
+    /// Signer-set change delay period not yet elapsed
+    SignersDelayNotElapsed = 1016,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThresholdChange {
     pub new_threshold: u32,
+    pub eta_ledger: u32,
+}
+
+/// Pending signer-set change queued by the admin.
+///
+/// `new_signers` is the complete replacement signer set that will become active
+/// once `apply_signers_change` is called after the `eta_ledger` has elapsed.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignersChange {
+    pub new_signers: Vec<Address>,
     pub eta_ledger: u32,
 }
 
@@ -96,6 +116,30 @@ pub struct ThresholdChangeAppliedEvent {
     pub admin: Address,
     pub old_threshold: u32,
     pub new_threshold: u32,
+    pub ledger: u32,
+}
+
+/// Emitted when a signer-set change is queued via `queue_signers_change`.
+#[contractevent]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignersChangeQueuedEvent {
+    pub admin: Address,
+    pub eta_ledger: u32,
+}
+
+/// Emitted when a queued signer-set change is applied via `apply_signers_change`.
+#[contractevent]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignersChangeAppliedEvent {
+    pub admin: Address,
+    pub ledger: u32,
+}
+
+/// Emitted when a pending signer-set change is cancelled via `cancel_signers_change`.
+#[contractevent]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignersChangeCancelledEvent {
+    pub admin: Address,
     pub ledger: u32,
 }
 
@@ -385,9 +429,7 @@ impl MultisigContract {
             return Err(MultisigError::InvalidThreshold);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Signers, &signers);
+        env.storage().instance().set(&DataKey::Signers, &signers);
 
         Ok(())
     }
@@ -399,6 +441,179 @@ impl MultisigContract {
     pub fn get_signers(env: Env) -> Option<Vec<Address>> {
         env.storage().instance().get(&DataKey::Signers)
     }
+
+    // ─── Queued signer-set change (cooldown) ──────────────────────────────────
+
+    /// Queue a signer-set replacement with a mandatory cooldown of
+    /// `MIN_SIGNERS_DELAY_LEDGERS` (~7 days).
+    ///
+    /// This prevents a momentary quorum from swapping the entire signer set in
+    /// a single ledger — the same takeover risk the threshold-change timelock was
+    /// designed to prevent, but exercised through the signer-set lever instead.
+    ///
+    /// # Arguments
+    /// * `env`         - Soroban environment
+    /// * `new_signers` - Replacement signer set (must be non-empty)
+    ///
+    /// # Security Invariant
+    /// The signer-set change is **not** applied immediately. It must be executed
+    /// separately via `apply_signers_change()` once `MIN_SIGNERS_DELAY_LEDGERS`
+    /// ledgers have elapsed. The pending change is inspectable via
+    /// `get_pending_signers_change()` and can be cancelled at any time by the
+    /// admin via `cancel_signers_change()`.
+    ///
+    /// Only one pending signer change can exist at a time. Queuing a new one
+    /// while one is already pending overwrites the previous pending change and
+    /// resets the cooldown window.
+    ///
+    /// # Errors
+    /// * `Unauthorized`    - Caller is not the admin
+    /// * `NotInitialized`  - Contract not initialized
+    /// * `InvalidThreshold` - `new_signers` is empty
+    pub fn queue_signers_change(
+        env: Env,
+        new_signers: Vec<Address>,
+    ) -> Result<(), MultisigError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        if new_signers.is_empty() {
+            return Err(MultisigError::InvalidThreshold);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        let eta_ledger = current_ledger + MIN_SIGNERS_DELAY_LEDGERS;
+
+        let change = SignersChange {
+            new_signers,
+            eta_ledger,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingSignersChange, &change);
+
+        SignersChangeQueuedEvent {
+            admin: admin.clone(),
+            eta_ledger,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Apply a previously queued signer-set change.
+    ///
+    /// `MIN_SIGNERS_DELAY_LEDGERS` ledgers must have elapsed since the change was
+    /// queued. On success the pending change is cleared and the live signer set
+    /// is updated atomically.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    ///
+    /// # Security Invariant
+    /// * Prevents same-ledger takeover by enforcing a delay equal to the
+    ///   threshold-change delay (`MIN_THRESHOLD_DELAY_LEDGERS`).
+    /// * Only applies if `current_ledger >= eta_ledger` from the queue call.
+    /// * Clears the pending change on successful application.
+    ///
+    /// # Errors
+    /// * `Unauthorized`           - Caller is not the admin
+    /// * `NotInitialized`         - Contract not initialized
+    /// * `NoQueuedSignersChange`  - No signer-set change is queued
+    /// * `SignersDelayNotElapsed` - Current ledger < eta_ledger
+    pub fn apply_signers_change(env: Env) -> Result<(), MultisigError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        let change: SignersChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingSignersChange)
+            .ok_or(MultisigError::NoQueuedSignersChange)?;
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < change.eta_ledger {
+            return Err(MultisigError::SignersDelayNotElapsed);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Signers, &change.new_signers);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingSignersChange);
+
+        SignersChangeAppliedEvent {
+            admin: admin.clone(),
+            ledger: current_ledger,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Cancel a pending signer-set change before it is applied.
+    ///
+    /// Can be called by the admin at any time while a change is queued —
+    /// including during the cooldown window. This is the emergency escape hatch
+    /// if a queued change is discovered to be malicious or erroneous.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    ///
+    /// # Errors
+    /// * `Unauthorized`          - Caller is not the admin
+    /// * `NotInitialized`        - Contract not initialized
+    /// * `NoQueuedSignersChange` - No signer-set change is currently queued
+    pub fn cancel_signers_change(env: Env) -> Result<(), MultisigError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::PendingSignersChange)
+        {
+            return Err(MultisigError::NoQueuedSignersChange);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingSignersChange);
+
+        SignersChangeCancelledEvent {
+            admin: admin.clone(),
+            ledger: env.ledger().sequence(),
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Get the pending signer-set change, if any.
+    ///
+    /// Returns `Some(SignersChange)` when a change has been queued but not yet
+    /// applied or cancelled, `None` otherwise.
+    ///
+    /// # Returns
+    /// `Option<SignersChange>` — the pending change including `new_signers` and
+    /// `eta_ledger`.
+    pub fn get_pending_signers_change(env: Env) -> Option<SignersChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingSignersChange)
+    }
+
+    /// Get the minimum signer-set change delay in ledgers.
+    ///
+    /// Currently equal to `MIN_THRESHOLD_DELAY_LEDGERS` (~7 days at 5 s/ledger)
+    /// so both governance levers share the same cooldown window.
+    pub fn get_min_signers_delay_ledgers(_env: Env) -> u32 {
+        MIN_SIGNERS_DELAY_LEDGERS
+    }
+
+    // ─── Approval / Execution ─────────────────────────────────────────────────
 
     /// Add an approval to an open proposal.
     ///
@@ -610,6 +825,9 @@ impl MultisigContract {
 
 #[cfg(test)]
 mod quorum_edge_test;
+
+#[cfg(test)]
+mod signer_cooldown_test;
 
 #[cfg(test)]
 mod tests {

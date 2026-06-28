@@ -56,7 +56,10 @@ fn repay_partial_leaves_positive_remainder() {
 
     let remaining = client.repay(&user, &100);
 
-    assert_eq!(remaining, 200, "partial repay must return positive remainder");
+    assert_eq!(
+        remaining, 200,
+        "partial repay must return positive remainder"
+    );
     assert!(
         client.get_position(&user).debt >= 0,
         "debt must not be negative after partial repay"

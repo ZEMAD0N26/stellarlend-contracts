@@ -1,8 +1,36 @@
+#[cfg(test)]
+mod revoke_split_test;
 use std::collections::HashMap;
+
+/// Error type returned by admin-gated and pause-gated operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VestingError {
+    /// The caller is not the configured admin.
+    Unauthorized,
+    /// Claim or revoke was attempted while the contract is paused.
+    ContractPaused,
+    /// The grant targeted by revoke does not exist.
+    NoSuchGrant,
+    /// All grants for the grantee are already revoked.
+    AlreadyRevoked,
+}
+
+impl core::fmt::Display for VestingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            VestingError::Unauthorized => write!(f, "only admin can perform this action"),
+            VestingError::ContractPaused => {
+                write!(f, "contract is paused; claim and revoke are disabled")
+            }
+            VestingError::NoSuchGrant => write!(f, "no such grant"),
+            VestingError::AlreadyRevoked => write!(f, "already revoked"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
-    pub grantee: String,
+    pub grantee: Address,
     pub total: u128,
     pub claimed: u128,
     pub released: u128,
@@ -13,8 +41,15 @@ pub struct Grant {
 }
 
 impl Grant {
+    /// Returns the amount vested at Unix timestamp `now`.
+    ///
+    /// Before `start_seconds + cliff_seconds` the result is zero (cliff gate).
+    /// After `start_seconds + duration_seconds` the result is capped at `total`.
+    /// In between, vesting grows linearly: `(total * elapsed) / duration_seconds`.
+    ///
+    /// See `VESTING_MATH.md` for the full formula and worked example.
     pub fn vested_at(&self, now: u64) -> u128 {
-        if now < self.start_seconds + self.cliff_seconds {
+        if now < self.start_seconds.saturating_add(self.cliff_seconds) {
             return 0;
         }
         if self.duration_seconds == 0 {
@@ -29,10 +64,17 @@ impl Grant {
         (self.total as u128 * elapsed as u128) / self.duration_seconds as u128
     }
 
+    /// Returns `released - claimed`, the amount the grantee can currently withdraw.
+    ///
+    /// `released` is the latest vested amount synced via [`sync`];
+    /// `claimed` is the cumulative amount already withdrawn.
     pub fn claimable(&self) -> u128 {
         self.released.saturating_sub(self.claimed)
     }
 
+    /// Advances the grant's `released` field to `vested_at(now)` and returns the
+    /// newly vested delta. This is called internally by [`claim`] and [`revoke`]
+    /// before any balance transfer.
     fn sync(&mut self, now: u64) -> u128 {
         let vested = self.vested_at(now);
         let newly_released = vested.saturating_sub(self.released);
@@ -40,6 +82,8 @@ impl Grant {
         newly_released
     }
 
+    /// Returns `total - released`, the unvested remainder that can be clawed back
+    /// via [`revoke`].
     fn locked(&self) -> u128 {
         self.total.saturating_sub(self.released)
     }
@@ -51,8 +95,28 @@ pub struct VestingContract {
     grants: HashMap<String, Vec<Grant>>,
     pub balances: HashMap<String, u128>,
     total_locked: u128,
+    /// When `true`, `claim` and `revoke` are blocked until the admin calls `resume`.
+    /// Vesting math (accrual) continues unaffected; only settlement is halted.
+    paused: bool,
 }
 
+const PERSISTENT_TTL_LEDGERS: u32 = 1_000_000;
+
+fn extend_grant_ttl(env: &Env, grantee: &Address) {
+    let key = DataKey::Grant(grantee.clone());
+    let extend_to = env.storage().max_ttl().min(PERSISTENT_TTL_LEDGERS);
+    let threshold = extend_to / 2 + 1;
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, threshold, extend_to);
+    }
+}
+
+#[contract]
+pub struct VestingContract;
+
+#[contractimpl]
 impl VestingContract {
     pub fn new(admin: &str, treasury: &str) -> Self {
         Self {
@@ -61,20 +125,88 @@ impl VestingContract {
             grants: HashMap::new(),
             balances: HashMap::new(),
             total_locked: 0,
+            paused: false,
         }
     }
 
+    // ── Pause / resume ────────────────────────────────────────────────────────
+
+    /// Pause the contract, blocking `claim` and `revoke` until `resume` is called.
+    ///
+    /// # Errors
+    /// Returns [`VestingError::Unauthorized`] if `caller` is not the admin.
+    ///
+    /// # Notes
+    /// Calling `pause` while already paused is a no-op (idempotent).
+    /// Accrued vesting math is not altered; only settlement is blocked.
+    pub fn pause(&mut self, caller: &str) -> Result<(), VestingError> {
+        if caller != self.admin {
+            return Err(VestingError::Unauthorized);
+        }
+        self.paused = true;
+        Ok(())
+    }
+
+    /// Resume the contract, re-enabling `claim` and `revoke`.
+    ///
+    /// # Errors
+    /// Returns [`VestingError::Unauthorized`] if `caller` is not the admin.
+    ///
+    /// # Notes
+    /// Calling `resume` while not paused is a no-op (idempotent).
+    pub fn resume(&mut self, caller: &str) -> Result<(), VestingError> {
+        if caller != self.admin {
+            return Err(VestingError::Unauthorized);
+        }
+        self.paused = false;
+        Ok(())
+    }
+
+    /// Returns `true` if the contract is currently paused.
+    ///
+    /// Frontends and integrators should query this before presenting claim or
+    /// revoke actions to users, so they can surface a clear "paused" message
+    /// instead of a failed transaction.
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// Reject the call when the contract is paused.
+    fn check_not_paused(&self) -> Result<(), VestingError> {
+        if self.paused {
+            return Err(VestingError::ContractPaused);
+        }
+        Ok(())
+    }
+
+    // ── Grant management ──────────────────────────────────────────────────────
+
     /// Adds a vesting schedule for `grantee` and increases the aggregate locked supply.
     pub fn add_grant(
-        &mut self,
-        grantee: &str,
+        env: Env,
+        grantee: Address,
         total: u128,
         start_seconds: u64,
         duration_seconds: u64,
         cliff_seconds: u64,
-    ) {
-        let g = Grant {
-            grantee: grantee.to_string(),
+    ) -> Result<(), VestingError> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        if total == 0 {
+            return Err(VestingError::InvalidParameters);
+        }
+
+        let token = Self::get_token(env.clone())?;
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        
+        // Transfer tokens from admin to the contract to escrow them.
+        token_client.transfer(&admin, &env.current_contract_address(), &(total as i128));
+
+        let grant = Grant {
+            grantee: grantee.clone(),
             total,
             claimed: 0,
             released: 0,
@@ -98,11 +230,22 @@ impl VestingContract {
         }
     }
 
-    pub fn claim(&mut self, grantee: &str, now: u64) -> u128 {
+    /// Advance all vesting schedules for `grantee` to `now` and transfer any
+    /// newly claimable tokens to the grantee's balance.
+    ///
+    /// Returns the amount transferred on success, or `0` if there is nothing
+    /// claimable at this time.
+    ///
+    /// # Errors
+    /// Returns [`VestingError::ContractPaused`] while the admin pause is active.
+    /// No state is mutated when this error is returned.
+    pub fn claim(&mut self, grantee: &str, now: u64) -> Result<u128, VestingError> {
+        self.check_not_paused()?;
+
         self.sync_grants(grantee, now);
         let grants = match self.grants.get_mut(grantee) {
             Some(x) => x,
-            None => return 0,
+            None => return Ok(0),
         };
 
         let mut amount = 0;
@@ -116,7 +259,7 @@ impl VestingContract {
         }
 
         if amount == 0 {
-            return 0;
+            return Ok(0);
         }
 
         let cbal = self.balances.entry("contract".to_string()).or_default();
@@ -125,18 +268,45 @@ impl VestingContract {
             let gbal = self.balances.entry(grantee.to_string()).or_default();
             *gbal += amount;
         }
-        amount
+        Ok(amount)
     }
 
-    pub fn revoke(&mut self, caller: &str, grantee: &str, now: u64) -> Result<u128, String> {
+    /// Revoke all active vesting schedules for `grantee`, transferring the
+    /// still-locked portion to the treasury address.
+    ///
+    /// Claws back unvested tokens from `grantee`'s schedules to the treasury:
+    ///
+    /// 1. Syncs all of `grantee`'s grants to `now` so that `released` reflects
+    ///    the current vested amount.
+    /// 2. For each non-revoked grant, computes `locked = total - released` and
+    ///    transfers the sum to the treasury.
+    /// 3. Resets each grant's `total` to its `released` value and sets
+    ///    `revoked = true`.
+    ///
+    /// After revoke the grantee keeps the vested portion and can still claim it;
+    /// the unvested portion is clawed back.
+    ///
+    /// See `VESTING_MATH.md` for the full formula and worked example.
+    ///
+    /// # Errors
+    /// - [`VestingError::Unauthorized`] — `caller` is not the admin.
+    /// - [`VestingError::ContractPaused`] — the admin pause is active.
+    ///   No state is mutated when this error is returned.
+    /// - [`VestingError::NoSuchGrant`] — no schedules exist for `grantee`.
+    /// - [`VestingError::AlreadyRevoked`] — all schedules are already revoked.
+    pub fn revoke(&mut self, caller: &str, grantee: &str, now: u64) -> Result<u128, VestingError> {
         if caller != self.admin {
-            return Err("only admin can revoke".to_string());
+            return Err(VestingError::Unauthorized);
         }
+        // Pause check is performed after the auth check so that the error
+        // ordering is consistent: unauthorized callers never learn whether the
+        // contract is paused.
+        self.check_not_paused()?;
 
         self.sync_grants(grantee, now);
         let grants = match self.grants.get_mut(grantee) {
             Some(x) => x,
-            None => return Err("no such grant".to_string()),
+            None => return Err(VestingError::NoSuchGrant),
         };
 
         let mut transfer = 0;
@@ -154,7 +324,7 @@ impl VestingContract {
         }
 
         if !revoked_any {
-            return Err("already revoked".to_string());
+            return Err(VestingError::AlreadyRevoked);
         }
 
         let cbal = self.balances.entry("contract".to_string()).or_default();
@@ -189,7 +359,7 @@ mod tests {
     fn claim_before_cliff_is_zero() {
         let mut c = VestingContract::new("admin", "treasury");
         c.add_grant("alice", 1000, 1000, 1000, 200);
-        let claimed = c.claim("alice", 1100);
+        let claimed = c.claim("alice", 1100).expect("claim should not error");
         assert_eq!(claimed, 0);
         assert_eq!(c.balance_of("alice"), 0);
         assert_eq!(c.total_locked(), 1000);
@@ -199,7 +369,7 @@ mod tests {
     fn claim_after_cliff_partial() {
         let mut c = VestingContract::new("admin", "treasury");
         c.add_grant("bob", 1000, 1000, 1000, 100);
-        let claimed = c.claim("bob", 1200);
+        let claimed = c.claim("bob", 1200).expect("claim should not error");
         assert_eq!(claimed, 200);
         assert_eq!(c.balance_of("bob"), 200);
         assert_eq!(c.total_locked(), 800);
@@ -209,12 +379,12 @@ mod tests {
     fn revoke_claws_unvested_to_treasury() {
         let mut c = VestingContract::new("admin", "treasury");
         c.add_grant("carol", 1000, 1000, 1000, 100);
-        let _ = c.claim("carol", 1200);
+        let _ = c.claim("carol", 1200).expect("claim should not error");
         assert_eq!(c.balance_of("contract"), 800);
         let transferred = c.revoke("admin", "carol", 1200).expect("revoke failed");
         assert_eq!(transferred, 800);
         assert_eq!(c.balance_of("treasury"), 800);
-        assert_eq!(c.claim("carol", 1300), 0);
+        assert_eq!(c.claim("carol", 1300).expect("claim should not error"), 0);
         assert_eq!(c.total_locked(), 0);
     }
 
@@ -223,10 +393,19 @@ mod tests {
         let mut c = VestingContract::new("admin", "treasury");
         c.add_grant("dan", 500, 0, 100, 0);
         let res = c.revoke("not-admin", "dan", 10);
-        assert!(res.is_err());
+        assert_eq!(res, Err(VestingError::Unauthorized));
         assert_eq!(c.total_locked(), 500);
     }
 }
+
+#[cfg(test)]
+mod pause_test;
+
+#[cfg(test)]
+mod vested_at_proptest;
+
+#[cfg(test)]
+mod vesting_doc_example_test;
 
 #[cfg(test)]
 mod vesting_views_test;

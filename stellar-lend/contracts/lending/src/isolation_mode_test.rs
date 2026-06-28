@@ -20,9 +20,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        IsolationConfig, LendingContract, LendingContractClient, LendingError,
-    };
+    use crate::{IsolationConfig, LendingContract, LendingContractClient, LendingError};
     use soroban_sdk::{testutils::Address as _, Address, Env};
 
     // -----------------------------------------------------------------------
@@ -481,7 +479,11 @@ mod tests {
         client.repay_against_collateral(&user, &999_999i128, &tok);
 
         let debt = client.get_isolation_debt(&tok);
-        assert!(debt >= 0, "isolation debt must not be negative; got {}", debt);
+        assert!(
+            debt >= 0,
+            "isolation debt must not be negative; got {}",
+            debt
+        );
         assert_eq!(debt, 0);
     }
 

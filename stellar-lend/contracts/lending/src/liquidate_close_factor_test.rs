@@ -45,6 +45,8 @@ fn run_case(collateral: i128, debt: i128, amount: i128) -> Outcome {
 
     let liquidator = Address::generate(&env);
     let borrower = Address::generate(&env);
+    let debt_asset = Address::generate(&env);
+    let collateral_asset = Address::generate(&env);
 
     let now = env.ledger().timestamp();
     env.as_contract(&cid, || {
@@ -60,7 +62,13 @@ fn run_case(collateral: i128, debt: i128, amount: i128) -> Outcome {
         );
     });
 
-    match client.try_liquidate(&liquidator, &borrower, &amount) {
+    match client.try_liquidate(
+        &liquidator,
+        &borrower,
+        &debt_asset,
+        &collateral_asset,
+        &amount,
+    ) {
         Err(Err(invoke)) => panic!("liquidate trapped (host error): {invoke:?}"),
         Ok(Err(conv)) => panic!("return-value conversion error: {conv:?}"),
 

@@ -23,7 +23,6 @@ pub struct DebtPosition {
     pub last_update: u64,
 }
 
-#[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RateSnapshot {
     pub total_debt: i128,

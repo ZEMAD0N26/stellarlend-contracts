@@ -88,7 +88,7 @@ fn accept_admin_without_pending_returns_error() {
     let (env, _contract_id, client, admin, _pending_admin, _second_pending_admin) = setup();
 
     let res = client.try_accept_admin();
-    assert_eq!(res, Ok(Err(LendingError::PendingAdminNotSet)));
+    assert_eq!(res, Err(Ok(LendingError::PendingAdminNotSet)));
     assert_eq!(client.get_admin(), admin);
     assert!(!env.storage().instance().has(&DataKey::PendingAdmin));
 }
@@ -114,12 +114,12 @@ fn double_accept_after_success_returns_missing_pending_error() {
     client.propose_admin(&pending_admin);
 
     mock_accept_admin_auth(&env, &contract_id, &pending_admin);
-    assert_eq!(client.try_accept_admin(), Ok(Ok(())));
+    client.accept_admin();
     assert_eq!(client.get_admin(), pending_admin);
     assert!(!env.storage().instance().has(&DataKey::PendingAdmin));
 
     let res = client.try_accept_admin();
-    assert_eq!(res, Ok(Err(LendingError::PendingAdminNotSet)));
+    assert_eq!(res, Err(Ok(LendingError::PendingAdminNotSet)));
 }
 
 #[test]

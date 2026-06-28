@@ -86,7 +86,6 @@ mod rotation_tests {
         let initial = validator_set_from(&kps);
         let mut bridge = Bridge::new(initial);
 
-        let new_kps = det_keypairs(3);
         // start indices after existing set to avoid overlap
         let new_kps: Vec<Keypair> = (10..13).map(det_keypair).collect();
         let new_set = validator_set_from(&new_kps);
@@ -459,7 +458,10 @@ mod rotation_tests {
         let mut bridge = Bridge::new(initial);
 
         let sets: Vec<(Vec<Keypair>, Vec<Keypair>)> = vec![
-            (kps_a.clone(), (10..13).map(det_keypair).collect()),
+            // `det_keypair` is deterministic, so regenerating kps_a's range is
+            // equivalent to cloning it — and ed25519-dalek::Keypair doesn't
+            // implement Clone, so we can't clone it directly.
+            ((0..3).map(det_keypair).collect(), (10..13).map(det_keypair).collect()),
             ((10..13).map(det_keypair).collect(), (20..23).map(det_keypair).collect()),
             ((20..23).map(det_keypair).collect(), (30..33).map(det_keypair).collect()),
         ];
