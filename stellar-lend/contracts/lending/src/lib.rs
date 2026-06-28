@@ -20,6 +20,8 @@ mod borrow_health_factor_test;
 #[cfg(test)]
 mod cross_asset_e2e_test;
 #[cfg(test)]
+mod cross_asset_health_perf_test;
+#[cfg(test)]
 mod cross_asset_test;
 #[cfg(test)]
 mod deposit_accounting_test;
