@@ -118,7 +118,7 @@ pub fn update_and_get_rate(env: &Env, target_rate: i128, params: &RateParams) ->
         last_rate, target_rate, params.max_rate_change_per_ledger_bps, elapsed, params.hysteresis_bps,
     );
     let clamped_rate = new_rate.max(params.rate_floor_bps).min(params.rate_ceiling_bps);
-    env.storage().instance().set(RateModelKey::LastRate, &clamped_rate);
-    env.storage().instance().set(RateModelKey::LastRateLedger, &current_ledger);
+    env.storage().instance().set(&RateModelKey::LastRate, &clamped_rate);
+    env.storage().instance().set(&RateModelKey::LastRateLedger, &current_ledger);
     clamped_rate
 }
