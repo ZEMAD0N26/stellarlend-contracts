@@ -90,6 +90,8 @@ mod rounding_drift_test;
 mod self_liquidation_test;
 #[cfg(test)]
 mod supply_rate_split_test;
+#[cfg(test)]
+mod effective_supply_rate_test;
 
 use debt::{
     borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,
