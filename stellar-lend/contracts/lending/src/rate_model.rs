@@ -135,8 +135,6 @@ pub fn compute_smoothed_rate(...) -> i128 {
             i128::MIN
         });
 
-    // The if/else block is the tail expression of the function.
-    // It must return an i128, so no semicolon here!
     if diff > 0 {
         last_rate
             .checked_add(diff.min(max_change))
@@ -145,16 +143,10 @@ pub fn compute_smoothed_rate(...) -> i128 {
         let decrease = diff.checked_abs().unwrap_or(i128::MAX).min(max_change);
         last_rate.checked_sub(decrease).unwrap_or(adjusted_target)
     }
-}
-    if diff > 0 {
-        last_rate
-            .checked_add(diff.min(max_change))
-            .unwrap_or(adjusted_target)
-    } else {
-        let decrease = diff.checked_abs().unwrap_or(i128::MAX).min(max_change);
-        last_rate.checked_sub(decrease).unwrap_or(adjusted_target)
-    }
-}
+} // <--- End of function
+
+// Note: The rest of your file (update_and_get_rate, tests) follows here.
+// Ensure there is only ONE closing brace for the file at the very end.
 
 /// Hook to update the persisted borrow rate state and return the new effective rate.
 ///
