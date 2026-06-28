@@ -2,14 +2,15 @@
 
 use crate::rate_model::{compute_smoothed_rate, RateParams};
 use crate::{DataKey, LendingContract, LendingContractClient};
-use soroban_sdk::{testutils::Ledger, Address, Env};
+use soroban_sdk::testutils::{Address as _, Ledger};
+use soroban_sdk::{Address, Env};
 
 fn setup_with_params(
     params: RateParams,
 ) -> (Env, LendingContractClient<'static>, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
-    env.ledger().set_sequence(100);
+    env.ledger().with_mut(|l| l.sequence_number = 100);
 
     let id = env.register(LendingContract, ());
     let client = LendingContractClient::new(&env, &id);
@@ -74,14 +75,14 @@ fn contract_view_keeps_rate_flat_inside_band_and_respects_clamp() {
         assert_eq!(crate::current_borrow_rate(&env), 1_700);
     });
 
-    env.ledger().set_sequence(101);
+    env.ledger().with_mut(|l| l.sequence_number = 101);
     client.borrow(&user, &100);
 
     env.as_contract(&client.address, || {
         assert_eq!(crate::current_borrow_rate(&env), 1_700);
     });
 
-    env.ledger().set_sequence(102);
+    env.ledger().with_mut(|l| l.sequence_number = 102);
     client.borrow(&user, &900);
 
     env.as_contract(&client.address, || {
