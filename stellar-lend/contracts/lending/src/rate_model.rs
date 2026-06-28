@@ -133,7 +133,7 @@ pub fn compute_smoothed_rate(
         return adjusted_target;
     }
     let max_change = max_step.saturating_mul(elapsed as i128);
-    let diff = adjusted_target.checked_sub(last_rate).unwrap_or(
+   let diff = adjusted_target.checked_sub(last_rate).unwrap_or(
     if adjusted_target >= last_rate {
         i128::MAX
     } else {
