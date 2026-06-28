@@ -90,6 +90,8 @@ mod rounding_drift_test;
 mod self_liquidation_test;
 #[cfg(test)]
 mod supply_rate_split_test;
+#[cfg(test)]
+mod utilization_history_test;
 
 use debt::{
     borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,
@@ -113,6 +115,12 @@ const ORACLE_SIGNATURE_DOMAIN: &[u8] = b"StellarLendOracle";
 const BPS_DENOM: i128 = 10_000;
 const SCHEMA_VERSION_V1: u32 = 1;
 const DEFAULT_MAX_FLASH_BPS: i128 = 10_000;
+/// Maximum number of utilization samples retained in persistent storage.
+///
+/// Samples are kept in an oldest-first bounded vector internally. When the cap
+/// is reached, the next write evicts exactly one oldest entry before appending
+/// the newest sample, keeping rent and read cost bounded.
+pub const UTILIZATION_HISTORY_CAPACITY: u32 = 256;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +174,8 @@ pub enum DataKey {
     /// Running total of debt currently backed by this isolated asset.
     /// Incremented on borrow, decremented on repay. Stored as `persistent`.
     IsolationDebt(Address),
+    /// Ring-buffered protocol utilization samples, stored oldest-first.
+    UtilizationHistory,
 }
 
 #[contractevent]
@@ -351,6 +361,20 @@ pub struct ProtocolMetrics {
     pub total_supply: i128,
     pub utilization_bps: i128,
     pub ledger: u32,
+}
+
+/// Point-in-time protocol utilization sample.
+///
+/// Samples are written from the borrow-rate recomputation path and retained in
+/// a fixed-capacity ring buffer. They are stable contract values intended for
+/// off-chain decoding and trend charting.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UtilizationSample {
+    /// Ledger sequence at which the rate path observed this utilization.
+    pub ledger: u32,
+    /// Utilization in basis points: `total_debt * 10_000 / total_deposits`.
+    pub utilization_bps: i128,
 }
 
 #[contracttype]
@@ -1618,6 +1642,15 @@ impl LendingContract {
         }
     }
 
+    /// Return recent protocol utilization samples newest-first.
+    ///
+    /// The view is read-only and returns an empty vector when no rate update has
+    /// written a sample yet. Each sample contains the ledger sequence and the
+    /// utilization observed in basis points.
+    pub fn get_utilization_history(env: Env) -> Vec<UtilizationSample> {
+        utilization_history_newest_first(&env)
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Cross-Asset Entrypoints
     // ════════════════════════════════════════════════════════════════
@@ -2423,6 +2456,53 @@ fn assert_borrow_solvent(
 
 fn current_borrow_rate(env: &Env) -> i128 {
     cached_borrow_rate(env)
+}
+
+pub(crate) fn write_utilization_sample(env: &Env, utilization_bps: i128) {
+    let mut samples = utilization_history_oldest_first(env);
+
+    if let Some(last) = samples.last() {
+        let last: UtilizationSample = last;
+        if last.ledger == env.ledger().sequence() {
+            return;
+        }
+    }
+
+    while samples.len() >= UTILIZATION_HISTORY_CAPACITY {
+        samples.remove(0);
+    }
+
+    samples.push_back(UtilizationSample {
+        ledger: env.ledger().sequence(),
+        utilization_bps,
+    });
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::UtilizationHistory, &samples);
+}
+
+/// Load utilization samples in their storage order, oldest-first.
+pub(crate) fn utilization_history_oldest_first(env: &Env) -> Vec<UtilizationSample> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::UtilizationHistory)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Load utilization samples in view order, newest-first.
+fn utilization_history_newest_first(env: &Env) -> Vec<UtilizationSample> {
+    let samples = utilization_history_oldest_first(env);
+    let mut newest_first = Vec::new(env);
+    let mut index = samples.len();
+
+    while index > 0 {
+        index -= 1;
+        let sample: UtilizationSample = samples.get(index).unwrap();
+        newest_first.push_back(sample);
+    }
+
+    newest_first
 }
 
 fn require_fresh_valuation_prices(env: &Env) -> Result<(), LendingError> {
