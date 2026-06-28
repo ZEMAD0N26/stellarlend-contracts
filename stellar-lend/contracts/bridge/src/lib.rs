@@ -4,6 +4,22 @@ use ed25519_dalek::{PublicKey, Signature, Verifier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Typed contract errors to represent specific domain violations.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BridgeError {
+    /// Emitted when attempting to configure a rolling window of length 0.
+    InvalidWindowSize,
+}
+
+impl std::fmt::Display for BridgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BridgeError::InvalidWindowSize => write!(f, "InvalidWindowSize: window_size must be > 0"),
+        }
+    }
+}
+
+impl std::error::Error for BridgeError {}
 /// Store validator public keys as raw bytes so the struct remains serde-friendly
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidatorSet {
@@ -139,7 +155,7 @@ impl Bridge {
             return Err(anyhow!("max_per_window must be >= 0"));
         }
         if window_size == 0 {
-            return Err(anyhow!("window_size must be > 0"));
+            return Err(BridgeError::InvalidWindowSize.into());
         }
 
         self.max_per_window = max_per_window;
@@ -156,10 +172,16 @@ impl Bridge {
     /// doesn't pay for that idle period with a stale, partially-consumed
     /// window (see SECURITY_NOTES.md for the rationale).
     fn roll_window_if_expired(&mut self, current_time: u64) {
-        let window_end = self.window_start.saturating_add(self.window_size);
-        if current_time >= window_end {
-            self.window_start = current_time;
-            self.window_inbound_total = 0;
+        if current_time < self.window_start {
+            // Guard against non-monotonic clock adjustments (time moving backwards).
+            return;
+        }
+
+        if let Some(window_end) = self.window_start.checked_add(self.window_size) {
+            if current_time >= window_end {
+                self.window_start = current_time;
+                self.window_inbound_total = 0;
+            }
         }
     }
 
@@ -210,6 +232,9 @@ mod inbound_cap_test;
 
 #[cfg(test)]
 mod epoch_monotonicity_proptest;
+
+#[cfg(test)]
+mod window_guard_test;
 
 #[cfg(test)]
 mod tests {
