@@ -82,10 +82,28 @@ pub struct Bridge {
     pub window_start: u64,
     /// Cumulative inbound value admitted so far within `[window_start, window_start + window_size)`.
     pub window_inbound_total: i128,
+    /// Per-instance domain identifier mixed into every quorum-proof payload
+    /// (issue #1146). Two bridge instances that share the same validator set and
+    /// epoch but have different `bridge_id`s produce different signing payloads,
+    /// so a signature collected for one instance cannot be replayed against the
+    /// other. Defaults to empty for [`Bridge::new`]; set a unique value per
+    /// deployment via [`Bridge::new_with_id`].
+    pub bridge_id: Vec<u8>,
 }
 
 /// Default rolling window length: one day, in seconds.
 pub const DEFAULT_INBOUND_WINDOW_SECS: u64 = 86_400;
+
+/// Constant domain-separation tag (the "purpose" tag) prefixed onto every
+/// quorum-proof signing payload (issue #1146).
+///
+/// Including a fixed, purpose-specific tag ensures a validator signature
+/// produced for **validator-set rotation** can never be reinterpreted as a
+/// signature over some other message that happened to share the same byte
+/// layout — a cross-context / cross-purpose signature-reuse attack. Bumping the
+/// trailing version (`v1`) cleanly invalidates every previously collected
+/// signature if the payload format ever changes.
+pub const QUORUM_PROOF_DOMAIN: &[u8] = b"stellarlend::bridge::quorum_proof::v1";
 
 impl Bridge {
     /// Construct a new bridge. Inbound value transfer is **fail-closed by
@@ -93,6 +111,16 @@ impl Bridge {
     /// rejects everything until [`Bridge::set_inbound_cap`] is called with a
     /// non-zero cap.
     pub fn new(initial: ValidatorSet) -> Self {
+        Self::new_with_id(initial, Vec::new())
+    }
+
+    /// Construct a new bridge with an explicit per-instance `bridge_id` used for
+    /// quorum-proof domain separation (issue #1146).
+    ///
+    /// Use a value that is unique per bridge deployment (e.g. an encoded
+    /// chain id + bridge contract address). Quorum signatures are bound to this
+    /// id, so a proof gathered for one instance will not verify against another.
+    pub fn new_with_id(initial: ValidatorSet, bridge_id: Vec<u8>) -> Self {
         Bridge {
             epoch: 0,
             validators: initial,
@@ -100,7 +128,32 @@ impl Bridge {
             window_size: DEFAULT_INBOUND_WINDOW_SECS,
             window_start: 0,
             window_inbound_total: 0,
+            bridge_id,
         }
+    }
+
+    /// Builds the canonical, domain-separated payload that quorum proofs sign
+    /// over (issue #1146):
+    ///
+    /// ```text
+    ///   payload = bincode((QUORUM_PROOF_DOMAIN, bridge_id, new_set_bytes, epoch))
+    /// ```
+    ///
+    /// Prefixing the constant [`QUORUM_PROOF_DOMAIN`] tag and the per-instance
+    /// `bridge_id` makes a signature valid **only** for this bridge instance and
+    /// this purpose. Signers and verifiers must both go through this function so
+    /// the bytes always match.
+    pub fn quorum_proof_payload(
+        bridge_id: &[u8],
+        new_set: &ValidatorSet,
+        epoch: u64,
+    ) -> Result<Vec<u8>> {
+        Ok(bincode::serialize(&(
+            QUORUM_PROOF_DOMAIN,
+            bridge_id,
+            new_set.to_bytes_vec(),
+            epoch,
+        ))?)
     }
 
     /// Verify a quorum proof from the current validator set over the (new_set, epoch) payload
@@ -109,8 +162,10 @@ impl Bridge {
             return Err(anyhow!("empty proofs"));
         }
 
-        // payload to be signed: bincode(new_set_bytes_vec, epoch)
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch))?;
+        // Domain-separated payload: bincode(domain_tag, bridge_id, new_set_bytes, epoch).
+        // The constant tag + per-instance bridge_id bind every signature to this
+        // exact bridge instance and purpose, preventing cross-context reuse (#1146).
+        let payload = Self::quorum_proof_payload(&self.bridge_id, new_set, epoch)?;
 
         let mut unique_signers: HashSet<Vec<u8>> = HashSet::new();
         for (pk, sig) in proofs.iter() {
@@ -244,6 +299,9 @@ impl Bridge {
 mod rotation_test;
 
 #[cfg(test)]
+mod domain_separation_test;
+
+#[cfg(test)]
 mod inbound_cap_test;
 
 #[cfg(test)]
@@ -281,7 +339,7 @@ mod tests {
 
         // proofs: have >2/3 of A sign the (new_set, epoch=1) payload
         let epoch = 1u64;
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch)).unwrap();
+        let payload = Bridge::quorum_proof_payload(&bridge.bridge_id, &new_set, epoch).unwrap();
 
         // need threshold of A: (4*2)/3+1 = 3
         let mut proofs = vec![];
@@ -313,7 +371,7 @@ mod tests {
         let new_set = ValidatorSet { validators: b_pks.iter().map(|p| p.to_bytes().to_vec()).collect() };
 
         let epoch = 1u64;
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch)).unwrap();
+        let payload = Bridge::quorum_proof_payload(&bridge.bridge_id, &new_set, epoch).unwrap();
 
         // need threshold of A: (5*2)/3+1 = 4. Provide only 3 signatures => fail
         let mut proofs = vec![];
@@ -338,7 +396,7 @@ mod tests {
 
         // wrong epoch (must be 1)
         let epoch = 2u64;
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch)).unwrap();
+        let payload = Bridge::quorum_proof_payload(&bridge.bridge_id, &new_set, epoch).unwrap();
 
         let mut proofs = vec![];
         for i in 0..2 {

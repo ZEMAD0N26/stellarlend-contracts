@@ -82,7 +82,7 @@ mod tests {
         epoch: u64,
         signers: &[&Keypair],
     ) -> Vec<(ed25519_dalek::PublicKey, Signature)> {
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch))
+        let payload = Bridge::quorum_proof_payload(&[], new_set, epoch)
             .expect("serialization must not fail");
         signers
             .iter()

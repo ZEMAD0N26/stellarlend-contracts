@@ -142,3 +142,62 @@ it does not replace quorum/epoch validation.
 
 Every conditional branch in `admit_inbound`, `set_inbound_cap`, and
 `roll_window_if_expired` is exercised by at least one test above.
+
+## Quorum-Proof Domain Separation (#1146)
+
+### Threat
+
+`verify_quorum_proof` originally had validators sign over
+`bincode((new_set_bytes, epoch))`. That payload carries **no domain separator
+and no bridge/chain identifier**, so a validator signature collected for one
+bridge instance (or one purpose) could be replayed against another instance that
+happens to share the same validator set and epoch — a cross-context
+signature-reuse attack.
+
+### Fix
+
+The signed payload is now **domain-separated**. Signers and verifiers both build
+it through `Bridge::quorum_proof_payload`:
+
+```text
+payload = bincode((
+    QUORUM_PROOF_DOMAIN,   // constant purpose tag: b"stellarlend::bridge::quorum_proof::v1"
+    bridge_id,             // per-instance id (set via Bridge::new_with_id)
+    new_set_bytes,         // Vec<Vec<u8>> validator public keys
+    epoch,                 // u64
+))
+```
+
+- **`QUORUM_PROOF_DOMAIN`** (the *purpose* tag) ensures a signature produced for
+  validator-set rotation can never be reinterpreted as a signature for some
+  other context. The trailing `v1` lets the format be bumped to atomically
+  invalidate all prior signatures.
+- **`bridge_id`** (per-instance) ensures a proof gathered for instance A does not
+  verify on instance B, even with an identical validator set and epoch.
+
+`bincode` length-prefixes each field, so the encoding is unambiguous (no field
+can "borrow" bytes from its neighbour).
+
+### Worked example
+
+Two bridges share validator set `S` and are rotating to set `S'` at epoch `1`:
+
+| | bridge_id | payload prefix | result of A's signatures on B |
+|---|---|---|---|
+| Instance A | `bridge-A` | `(DOMAIN, "bridge-A", S', 1)` | — |
+| Instance B | `bridge-B` | `(DOMAIN, "bridge-B", S', 1)` | **rejected** (different preimage → different hash → signature invalid) |
+
+A signature over A's payload does not satisfy B's verification because the
+`bridge_id` bytes differ, so `pk.verify(&payload_B, sig_over_A)` fails and the
+proof never reaches quorum.
+
+### Invariants preserved
+
+The quorum-counting and duplicate-signer dedup logic is unchanged; only the
+bytes being signed/verified changed. Old, un-tagged signatures no longer verify.
+
+### Coverage
+
+`src/domain_separation_test.rs`: correct-domain accepted; wrong-bridge-id
+rejected; wrong-purpose tag rejected; legacy un-tagged signature rejected;
+instance-A proof rejected on instance B; domain constant pinned.
