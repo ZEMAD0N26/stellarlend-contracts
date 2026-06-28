@@ -82,6 +82,10 @@ pub struct Bridge {
     pub window_start: u64,
     /// Cumulative inbound value admitted so far within `[window_start, window_start + window_size)`.
     pub window_inbound_total: i128,
+    /// Maximum number of validator changes (added + removed) allowed in a single rotation.
+    ///
+    /// If `None`, the churn limit is disabled (default).
+    pub max_churn: Option<u32>,
 }
 
 /// Default rolling window length: one day, in seconds.
@@ -100,6 +104,7 @@ impl Bridge {
             window_size: DEFAULT_INBOUND_WINDOW_SECS,
             window_start: 0,
             window_inbound_total: 0,
+            max_churn: None,
         }
     }
 
@@ -137,11 +142,60 @@ impl Bridge {
         Ok(())
     }
 
+    /// Set the maximum validator-set churn limit allowed per rotation.
+    ///
+    /// If `max_churn` is `None`, the churn limit is disabled.
+    pub fn set_max_churn(&mut self, max_churn: Option<u32>) {
+        self.max_churn = max_churn;
+    }
+
     /// Rotate validators to `new_set` at `next_epoch` if `proofs` from current set form a quorum.
     /// The `epoch` must be exactly current_epoch + 1.
-    pub fn rotate_validators(&mut self, new_set: ValidatorSet, epoch: u64, proofs: Vec<(PublicKey, Signature)>) -> Result<()> {
+    ///
+    /// Also enforces the `max_churn` limit (if configured) on the symmetric difference
+    /// between the current validator set and the new validator set.
+    ///
+    /// Returns the computed churn count on success.
+    pub fn rotate_validators(
+        &mut self,
+        new_set: ValidatorSet,
+        epoch: u64,
+        proofs: Vec<(PublicKey, Signature)>,
+    ) -> Result<u32> {
         if epoch != self.epoch + 1 {
             return Err(anyhow!("invalid epoch: must be current_epoch + 1"));
+        }
+
+        // Compute churn: symmetric difference size between current set and new set.
+        let current_set_uniq: HashSet<&[u8]> = self
+            .validators
+            .validators
+            .iter()
+            .map(|v| v.as_slice())
+            .collect();
+        let new_set_uniq: HashSet<&[u8]> = new_set
+            .validators
+            .iter()
+            .map(|v| v.as_slice())
+            .collect();
+
+        let added = new_set_uniq.difference(&current_set_uniq).count();
+        let removed = current_set_uniq.difference(&new_set_uniq).count();
+
+        let added_u32 = u32::try_from(added).map_err(|_| anyhow!("added count overflow"))?;
+        let removed_u32 = u32::try_from(removed).map_err(|_| anyhow!("removed count overflow"))?;
+        let churn = added_u32
+            .checked_add(removed_u32)
+            .ok_or_else(|| anyhow!("churn computation overflowed"))?;
+
+        if let Some(limit) = self.max_churn {
+            if churn > limit {
+                return Err(anyhow!(
+                    "validator set churn of {} exceeds the limit of {}",
+                    churn,
+                    limit
+                ));
+            }
         }
 
         self.verify_quorum_proof(&new_set, epoch, &proofs)?;
@@ -149,7 +203,7 @@ impl Bridge {
         // swap atomically
         self.validators = new_set;
         self.epoch = epoch;
-        Ok(())
+        Ok(churn)
     }
 
     /// Verify inbound message signature epoch. Messages signed with an epoch < current epoch are rejected.
@@ -254,6 +308,9 @@ mod window_guard_test;
 
 #[cfg(test)]
 mod validatorset_proptest;
+
+#[cfg(test)]
+mod rotation_churn_test;
 
 #[cfg(test)]
 mod tests {
