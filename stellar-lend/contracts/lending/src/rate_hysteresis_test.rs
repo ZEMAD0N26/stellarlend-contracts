@@ -2,7 +2,7 @@
 
 use crate::rate_model::{compute_smoothed_rate, RateParams};
 use crate::{DataKey, LendingContract, LendingContractClient};
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{Address, Env};
 
 fn setup_with_params(
