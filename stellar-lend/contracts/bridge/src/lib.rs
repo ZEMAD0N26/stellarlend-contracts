@@ -4,17 +4,63 @@ use ed25519_dalek::{PublicKey, Signature, Verifier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Minimum number of validators required for a secure validator set.
+///
+/// A set with fewer than this many validators has an unacceptably low
+/// supermajority threshold — a single compromised key or node outage can
+/// halt or subvert the bridge.  The value `3` ensures the supermajority
+/// threshold is at least 3, matching the BFT assumption that fewer than
+/// 1/3 of validators may be Byzantine.
+pub const MIN_VALIDATORS: usize = 3;
+
+/// Maximum number of validators permitted in a single set.
+///
+/// This limit bounds the proof‑verification cost of a quorum check and
+/// prevents unbounded storage growth.  The value `32` is a generous
+/// upper bound that accommodates most real‑world bridge deployments
+/// while keeping per‑rotation verification within reasonable limits.
+pub const MAX_VALIDATORS: usize = 32;
+
 /// Typed contract errors to represent specific domain violations.
 #[derive(Debug, PartialEq, Eq)]
 pub enum BridgeError {
     /// Emitted when attempting to configure a rolling window of length 0.
     InvalidWindowSize,
+    /// Emitted when `rotate_validators` receives a `new_set` whose effective
+    /// (deduplicated) validator count is below [`MIN_VALIDATORS`].
+    ValidatorSetTooSmall,
+    /// Emitted when `rotate_validators` receives a `new_set` whose effective
+    /// (deduplicated) validator count exceeds [`MAX_VALIDATORS`].
+    ValidatorSetTooLarge,
+    /// Emitted when `rotate_validators` receives a `new_set` containing
+    /// duplicate public keys.
+    DuplicateValidatorKey,
 }
 
 impl std::fmt::Display for BridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BridgeError::InvalidWindowSize => write!(f, "InvalidWindowSize: window_size must be > 0"),
+            BridgeError::InvalidWindowSize => {
+                write!(f, "InvalidWindowSize: window_size must be > 0")
+            }
+            BridgeError::ValidatorSetTooSmall => {
+                write!(
+                    f,
+                    "ValidatorSetTooSmall: validator set must have at least {MIN_VALIDATORS} unique validators"
+                )
+            }
+            BridgeError::ValidatorSetTooLarge => {
+                write!(
+                    f,
+                    "ValidatorSetTooLarge: validator set must have at most {MAX_VALIDATORS} unique validators"
+                )
+            }
+            BridgeError::DuplicateValidatorKey => {
+                write!(
+                    f,
+                    "DuplicateValidatorKey: new_set contains duplicate public keys"
+                )
+            }
         }
     }
 }
@@ -139,9 +185,49 @@ impl Bridge {
 
     /// Rotate validators to `new_set` at `next_epoch` if `proofs` from current set form a quorum.
     /// The `epoch` must be exactly current_epoch + 1.
+    ///
+    /// # Security validation
+    ///
+    /// Before verifying the quorum proof, this function validates the incoming
+    /// `new_set`:
+    ///
+    /// 1. **Size bounds** — the deduplicated validator count must lie within
+    ///    [`MIN_VALIDATORS`, `MAX_VALIDATORS`].  Rejects empty or single-validator
+    ///    sets that would collapse the supermajority into a single point of
+    ///    failure, and oversized sets that would make quorum verification
+    ///    prohibitively expensive.
+    /// 2. **Duplicate keys** — the raw `new_set` must not contain duplicate
+    ///    public-key byte representations.  While the [`ValidatorSet::len`] and
+    ///    [`ValidatorSet::threshold`] methods themselves deduplicate for quorum
+    ///    counting, a set that *relies* on dedup to meet its size bound is a
+    ///    bug waiting to happen — the extra duplicate entries serve no purpose
+    ///    and may mask an operator error during key collection.
     pub fn rotate_validators(&mut self, new_set: ValidatorSet, epoch: u64, proofs: Vec<(PublicKey, Signature)>) -> Result<()> {
         if epoch != self.epoch + 1 {
             return Err(anyhow!("invalid epoch: must be current_epoch + 1"));
+        }
+
+        // ── Validate new_set size bounds ──────────────────────────────────
+        let unique_count = new_set.len();
+        if unique_count < MIN_VALIDATORS {
+            return Err(anyhow!("{}", BridgeError::ValidatorSetTooSmall));
+        }
+        if unique_count > MAX_VALIDATORS {
+            return Err(anyhow!("{}", BridgeError::ValidatorSetTooLarge));
+        }
+
+        // ── Validate no duplicate keys ────────────────────────────────────
+        // We check the *raw* (pre-dedup) list.  The `len()` method deduplicates
+        // internally, but we also want to reject sets that contain any duplicate
+        // entries at all — they are never legitimate and always indicate an
+        // operator error.
+        {
+            let mut seen = std::collections::HashSet::new();
+            for key_bytes in &new_set.validators {
+                if !seen.insert(key_bytes.as_slice()) {
+                    return Err(anyhow!("{}", BridgeError::DuplicateValidatorKey));
+                }
+            }
         }
 
         self.verify_quorum_proof(&new_set, epoch, &proofs)?;
@@ -245,6 +331,9 @@ mod rotation_test;
 
 #[cfg(test)]
 mod inbound_cap_test;
+
+#[cfg(test)]
+mod validator_bounds_test;
 
 #[cfg(test)]
 mod epoch_monotonicity_proptest;

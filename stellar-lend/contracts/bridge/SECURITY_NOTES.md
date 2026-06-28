@@ -11,6 +11,26 @@ Implementation notes
 - Quorum: uses strict supermajority (floor(2n/3)+1). This should be chosen to match protocol requirements; adjust if BFT tolerance differs.
 - Serialization: validators stored as `Vec<Vec<u8>>` (raw public key bytes) to ensure deterministic encoding and avoid cross-crate serde issues.
 - Atomicity: `rotate_validators` performs proof verification before swapping validators and advancing the epoch.
+- **Validator-set size bounds**: Before verifying the quorum proof, `rotate_validators` validates that the deduplicated count of the incoming `new_set` lies within [`MIN_VALIDATORS`, `MAX_VALIDATORS`] (currently 3 and 32 respectively). Duplicate public keys are rejected outright — a set that relies on dedup to meet its size bound always indicates an operator error.
+
+### Validator-set size bounds
+
+`rotate_validators` enforces two pre-proof checks on every `new_set`:
+
+1. **Size bounds**: the deduplicated validator count must be ≥ `MIN_VALIDATORS` (3) and ≤ `MAX_VALIDATORS` (32).
+   - A 1‑ or 2‑validator set produces a supermajority threshold of 1 or 2 — too few for meaningful fault tolerance.
+   - An empty set produces `threshold() = 1` over zero validators — an un‑securable state.
+2. **Duplicate-key rejection**: the raw (pre‑dedup) list must contain no duplicate public‑key byte representations.
+
+| Scenario | Expected outcome |
+|---|---|
+| Empty `new_set` | **Rejected** — `ValidatorSetTooSmall` |
+| `new_set` with 1 unique validator | **Rejected** — `ValidatorSetTooSmall` |
+| `new_set` with 2 unique validators | **Rejected** — `ValidatorSetTooSmall` |
+| `new_set` exactly `MIN_VALIDATORS` (3) | **Accepted** (if quorum met) |
+| `new_set` exactly `MAX_VALIDATORS` (32) | **Accepted** (if quorum met) |
+| `new_set` > `MAX_VALIDATORS` (33+) | **Rejected** — `ValidatorSetTooLarge` |
+| Duplicate public key bytes in `new_set` | **Rejected** — `DuplicateValidatorKey` |
 
 Operational guidance
 
