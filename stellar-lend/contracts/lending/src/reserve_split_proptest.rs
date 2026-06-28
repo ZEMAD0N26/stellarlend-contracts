@@ -36,7 +36,7 @@
 //! Tests are automatically included in the test suite and can be run via:
 //!
 //! ```bash
-cargo test reserve_split_proptest
+//! cargo test reserve_split_proptest
 //! ```
 //!
 //! They run quickly and exercise no‑core contracts, making them ideal for CI and
@@ -110,7 +110,7 @@ proptest! {
     /// Conservative rounding: fractional unit falls to depositor (floor division).
     ///
     /// The protocol never takes more than its exact share; remainder always lands
-    /// with depositors as per the function’s contract.
+    /// with depositors as per the function's contract.
     #[test]
     fn prop_split_rounding_conservative(
         total_interest in arb_total_interest_safe(),
@@ -127,7 +127,7 @@ proptest! {
             .unwrap();
         assert_eq!(
             reserve_cut, exact_share,
-            "reserve cut should be floor(total * rf / 10_000")
+            "reserve cut should be floor(total * rf / 10_000"
         );
         assert!(reserve_cut <= exact_share + 1, "reserve cut should never exceed exact share by more than 1");
         assert!(reserve_cut >= exact_share || (total_interest == 0 && reserve_factor_bps == 0), "reserve cut should be either exact or exact-1");
