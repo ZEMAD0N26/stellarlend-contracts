@@ -7,6 +7,8 @@ pub mod rate_model;
 
 #[cfg(test)]
 mod rate_smoothing_proof_doctest;
+#[cfg(test)]
+mod cross_asset_roundtrip_test;
 pub mod rounding_strategy;
 pub mod upgrade;
 

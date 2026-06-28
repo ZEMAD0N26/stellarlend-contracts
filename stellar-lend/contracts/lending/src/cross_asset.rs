@@ -336,6 +336,12 @@ pub fn withdraw_asset_internal(
     Ok(new_balance)
 }
 
+/// Internal function to handle borrowing an asset.
+///
+/// Ensures the protocol is not paused or in emergency state. Validates that the amount
+/// meets minimum requirements and that the user's aggregate health factor remains above
+/// the threshold post-borrow. Updates the global `TotalDebtAsset`, adds the asset to the
+/// user's debt list, and extends the TTL for the debt record.
 pub fn borrow_asset_internal(
     env: &Env,
     user: &Address,
@@ -435,6 +441,13 @@ pub fn borrow_asset_internal(
     Ok(updated.principal)
 }
 
+/// Internal function to handle repaying an asset.
+///
+/// Ensures the protocol is not paused or in emergency state. Accrues interest on the user's
+/// current position and calculates the required repayment. If the repayment covers the full
+/// principal and interest, the asset is removed from the user's debt list. Excess repayment
+/// (overpay) is conceptually refunded by only returning the amount actually absorbed by the debt.
+/// Also updates the global `TotalDebtAsset` and extends the TTL of the user's debt tracking data.
 pub fn repay_asset_internal(
     env: &Env,
     user: &Address,
