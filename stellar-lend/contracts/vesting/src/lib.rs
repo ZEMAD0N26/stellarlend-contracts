@@ -2,6 +2,34 @@
 mod revoke_split_test;
 use std::collections::HashMap;
 
+pub use soroban_sdk::{contracttype, contractevent, Address, Env, Val, IntoVal, Vec, Symbol};
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+pub enum DataKey {
+    Grant(Address),
+}
+
+#[contractevent]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantTransferred {
+    pub from: Address,
+    pub to: Address,
+    pub amount: u128,
+    pub timestamp: u64,
+}
+
+fn extend_grant_ttl(env: &Env, grantee: &Address) {
+    let key = DataKey::Grant(grantee.clone());
+    let extend_to = env.storage().max_ttl().min(PERSISTENT_TTL_LEDGERS);
+    let threshold = extend_to / 2 + 1;
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, threshold, extend_to);
+    }
+}
+
 /// Error type returned by admin-gated and pause-gated operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VestingError {
@@ -19,6 +47,10 @@ pub enum VestingError {
     ZeroDuration,
     /// `cliff_seconds` must not exceed `duration_seconds`.
     CliffExceedsDuration,
+    /// The destination grantee already has an active grant.
+    DestinationAlreadyHasGrant,
+    /// Invalid parameters provided to the function.
+    InvalidParameters,
 }
 
 impl core::fmt::Display for VestingError {
@@ -35,6 +67,10 @@ impl core::fmt::Display for VestingError {
             VestingError::CliffExceedsDuration => {
                 write!(f, "cliff_seconds must not exceed duration_seconds")
             }
+            VestingError::DestinationAlreadyHasGrant => {
+                write!(f, "destination grantee already has an active grant")
+            }
+            VestingError::InvalidParameters => write!(f, "invalid parameters"),
         }
     }
 }
@@ -350,6 +386,15 @@ impl VestingContract {
         *self.balances.get(who).unwrap_or(&0)
     }
 
+    /// Returns the grantee address associated with a grant.
+    ///
+    /// `grantee` is the beneficiary address whose grants should be returned.
+    pub fn get_grantee(&self, grantee: &str) -> Option<Address> {
+        self.grants.get(grantee).and_then(|grants| {
+            grants.first().map(|grant| grant.grantee.clone())
+        })
+    }
+
     /// Returns every vesting schedule recorded for `grantee`.
     pub fn get_grants(&self, grantee: &str) -> Vec<Grant> {
         self.grants.get(grantee).cloned().unwrap_or_default()
@@ -358,6 +403,78 @@ impl VestingContract {
     /// Returns the aggregate locked supply tracked across all grants.
     pub fn total_locked(&self) -> u128 {
         self.total_locked
+    }
+
+    /// Transfers a grant from one grantee to another, preserving the vesting schedule.
+    ///
+    /// # Arguments
+    /// - `caller`: The admin address that must authenticate this operation.
+    /// - `from`: The current grantee address whose grant will be transferred.
+    /// - `to`: The new grantee address that will receive the grant.
+    /// - `now`: The current Unix timestamp, used to sync vesting schedules.
+    ///
+    /// # Behavior
+    /// 1. Requires `caller` to be the contract admin; returns [`VestingError::Unauthorized`] otherwise.
+    /// 2. Fails if the contract is paused; returns [`VestingError::ContractPaused`].
+    /// 3. Fails if the source grant does not exist for the `from` address.
+    /// 4. Fails if the destination already has an active grant; returns [`VestingError::DestinationAlreadyHasGrant`].
+    /// 5. Synchronizes both `from` and `to` grantees' schedules to `now`.
+    /// 6. Moves all grants from `from` to `to`, preserving all schedule fields.
+    /// 7. Updates `total_locked` by removing the transferred amount.
+    /// 8. Extends the TTL for the new grantee's storage entry via `extend_grant_ttl`.
+    /// 9. Emits a [`GrantTransferred`] event with the transfer details.
+    ///
+    /// # Errors
+    /// - [`VestingError::Unauthorized`] — `caller` is not the admin.
+    /// - [`VestingError::ContractPaused`] — the admin pause is active.
+    /// - [`VestingError::NoSuchGrant`] — no schedules exist for `from`.
+    /// - [`VestingError::DestinationAlreadyHasGrant`] — `to` already has active schedules.
+    ///
+    /// # Note
+    /// The sync step ensures that `released` fields reflect vesting up to `now` before
+    /// the transfer, preserving the exact claimed amount and vesting schedule.
+    pub fn transfer_grant(
+        &mut self,
+        env: &Env,
+        caller: &str,
+        from: &str,
+        to: &str,
+        now: u64,
+    ) -> Result<(), VestingError> {
+        if caller != self.admin {
+            return Err(VestingError::Unauthorized);
+        }
+        self.check_not_paused()?;
+
+        if !self.grants.contains_key(from) {
+            return Err(VestingError::NoSuchGrant);
+        }
+        if self.grants.contains_key(to) {
+            return Err(VestingError::DestinationAlreadyHasGrant);
+        }
+
+        self.sync_grants(from, now);
+        self.sync_grants(to, now);
+
+        if let Some(from_grants) = self.grants.remove(from) {
+            self.grants.entry(to.to_string()).or_default().extend(from_grants);
+            self.total_locked = self.total_locked.saturating_sub(
+                from_grants.iter().map(|g| g.total).sum(),
+            );
+        }
+
+        extend_grant_ttl(env, &Address::from_string(to));
+        env.events().emit(
+            VestingContract,
+            GrantTransferred {
+                from: Address::from_string(from),
+                to: Address::from_string(to),
+                amount: from_grants.iter().map(|g| g.total).sum(),
+                timestamp: now,
+            },
+        );
+
+        Ok(())
     }
 }
 
