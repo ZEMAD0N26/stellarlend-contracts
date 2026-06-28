@@ -4,8 +4,8 @@ use crate::{DataKey, PriceRecord};
 use crate::{LendingContract, LendingContractClient};
 use soroban_sdk::testutils::{Address as _, Ledger};
 
-use soroban_sdk::{Address, Env};
 use crate::MockAsset;
+use soroban_sdk::{Address, Env};
 
 fn setup() -> (
     Env,
