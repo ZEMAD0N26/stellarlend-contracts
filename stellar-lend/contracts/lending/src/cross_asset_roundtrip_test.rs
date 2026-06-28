@@ -1,10 +1,8 @@
 #![cfg(test)]
 
-use crate::{DataKey, PriceRecord};
-use crate::{LendingContract, LendingContractClient};
-use soroban_sdk::testutils::{Address as _, Ledger};
-use soroban_sdk::{Address, Env};
-use stellar_lend_common::MockAsset;
+use crate::{DataKey, LendingContract, LendingContractClient, MockAsset, PriceRecord};
+use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
+use soroban_sdk::{Address, Env, Vec};
 
 fn setup() -> (
     Env,
@@ -73,8 +71,18 @@ fn test_cross_asset_borrow_repay_roundtrip() {
     client.deposit_collateral_asset(&user, &asset_b, &deposit_amount);
 
     // Pre-borrow checks
-    let pre_borrow_total_debt = client.get_total_debt(&asset_a);
-    let initial_user_debt_list = client.get_debt_assets(&user);
+    let pre_borrow_total_debt: i128 = env.as_contract(&id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalDebtAsset(asset_a.clone()))
+            .unwrap_or(0)
+    });
+    let initial_user_debt_list: Vec<Address> = env.as_contract(&id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserDebtAssets(user.clone()))
+            .unwrap_or(Vec::new(&env))
+    });
     assert!(initial_user_debt_list.is_empty());
 
     // 2. Borrow Asset A
@@ -83,20 +91,30 @@ fn test_cross_asset_borrow_repay_roundtrip() {
     assert_eq!(principal, borrow_amount);
 
     // Check debt list
-    let mid_borrow_debt_list = client.get_debt_assets(&user);
+    let mid_borrow_debt_list: Vec<Address> = env.as_contract(&id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserDebtAssets(user.clone()))
+            .unwrap_or(Vec::new(&env))
+    });
     assert_eq!(mid_borrow_debt_list.len(), 1);
     assert_eq!(mid_borrow_debt_list.get(0).unwrap(), asset_a);
 
     // Check total debt increased
-    let mid_borrow_total_debt = client.get_total_debt(&asset_a);
+    let mid_borrow_total_debt: i128 = env.as_contract(&id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalDebtAsset(asset_a.clone()))
+            .unwrap_or(0)
+    });
     assert_eq!(mid_borrow_total_debt, pre_borrow_total_debt + borrow_amount);
 
     // 3. Advance Ledger Time (Accrue Interest)
     // Fast forward 1 year (31536000 seconds)
-    env.ledger().with_mut(|l| {
-        l.timestamp += 31536000;
-        l.sequence += 100000;
-    });
+    let mut li: LedgerInfo = env.ledger().get();
+    li.timestamp = li.timestamp.saturating_add(31_536_000);
+    li.sequence_number = li.sequence_number.saturating_add(100_000);
+    env.ledger().set(li);
 
     // We can't directly check the accrued interest from standard methods without triggering a read that accrues
     // Repaying with an amount larger than the debt will refund the excess
@@ -111,7 +129,12 @@ fn test_cross_asset_borrow_repay_roundtrip() {
     assert_eq!(remaining_debt, 0);
 
     // Assert debt list is cleared
-    let post_repay_debt_list = client.get_debt_assets(&user);
+    let post_repay_debt_list: Vec<Address> = env.as_contract(&id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserDebtAssets(user.clone()))
+            .unwrap_or(Vec::new(&env))
+    });
     assert!(
         post_repay_debt_list.is_empty(),
         "Debt list should be cleared on full repay"
@@ -121,7 +144,12 @@ fn test_cross_asset_borrow_repay_roundtrip() {
     // In many designs, total_debt only tracks principal or principal + interest.
     // If interest is retained in reserves, the total debt should decrease by the repaid principal.
     // We check that it goes down.
-    let post_repay_total_debt = client.get_total_debt(&asset_a);
+    let post_repay_total_debt: i128 = env.as_contract(&id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalDebtAsset(asset_a.clone()))
+            .unwrap_or(0)
+    });
     // Depending on reserve routing, total debt may not perfectly equal pre_borrow_total_debt,
     // but it should definitely be less than mid_borrow_total_debt and close to 0.
     // Since the system might keep interest as reserve, we can't assert exact equality without knowing the reserve factor,
