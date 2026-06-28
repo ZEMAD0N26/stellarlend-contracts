@@ -74,6 +74,8 @@ mod repay_debt_floor_test;
 #[cfg(test)]
 mod repay_overpay_test;
 #[cfg(test)]
+mod reserve_split_proptest;
+#[cfg(test)]
 mod rounding_drift_test;
 #[cfg(test)]
 mod self_liquidation_test;
