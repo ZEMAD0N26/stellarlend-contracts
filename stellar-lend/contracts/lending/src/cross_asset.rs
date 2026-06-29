@@ -250,7 +250,7 @@ pub fn compute_aggregate_health_factor(env: &Env, user: &Address) -> Result<i128
 
     let mut weighted_collateral: i128 = 0;
     let mut total_debt_value: i128 = 0;
-    
+
     // Cache to prevent duplicate price fetches for assets on both sides.
     let mut price_cache: Map<Address, PriceRecord> = Map::new(env);
 
