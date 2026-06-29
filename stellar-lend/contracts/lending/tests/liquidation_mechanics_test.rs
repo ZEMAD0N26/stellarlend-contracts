@@ -1,16 +1,13 @@
 // Verification test for liquidation mechanics documentation
 // Ensures that the formulae and examples in LIQUIDATION_MECHANICS.md remain correct.
 
-#[cfg(test)]
 mod tests {
-    use crate::math;
-    use soroban_sdk::{testutils::Address as _, Env};
-    use stellarlend_lending::*;
+    use stellar_lend_common::BPS_DENOM;
+    use stellarlend_lending::math;
+    use stellarlend_lending::{CLOSE_FACTOR, LIQUIDATION_THRESHOLD_BPS};
 
     // Helper to compute seized collateral based on actual repay
     fn compute_seized(actual_repay: i128) -> i128 {
-        // BPS_DENOM and INCENTIVE_BPS are defined in lib.rs
-        const BPS_DENOM: i128 = 10_000;
         const INCENTIVE_BPS: i128 = 1_000; // 10%
         math::checked_mul_div_floor(actual_repay, BPS_DENOM + INCENTIVE_BPS, BPS_DENOM).unwrap()
     }
@@ -35,8 +32,8 @@ mod tests {
 
         // Seized collateral
         let seized = compute_seized(actual_repay);
-        assert_eq!(seized, 550);
-        assert_eq!(collateral - seized, 7_450);
+        assert_eq!(seized, 5_500);
+        assert_eq!(collateral - seized, 2_500);
         assert_eq!(debt - actual_repay, 5_000);
     }
 

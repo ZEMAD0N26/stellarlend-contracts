@@ -2,7 +2,7 @@ use soroban_sdk::{contracttype, Address, Env};
 
 use crate::math::split_interest_by_reserve_factor;
 use crate::rounding_strategy::{calculate_interest_with_rounding, RoundingError, RoundingMode};
-use crate::{rate_model, DataKey};
+use crate::{rate_model, write_utilization_sample, DataKey};
 use stellar_lend_common::BPS_DENOM;
 
 /// Default APR when no dynamic rate is available: 5% (500 bps).
@@ -34,6 +34,15 @@ pub struct RateSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BorrowRateCache {
     pub ledger_sequence: u32,
+    pub rate_bps: i128,
+}
+
+/// Aggregate borrow-rate calculation output for one storage snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BorrowRateComputation {
+    /// Current utilization in basis points.
+    pub utilization_bps: i128,
+    /// Borrow APR in basis points.
     pub rate_bps: i128,
 }
 
@@ -121,25 +130,57 @@ pub fn load_rate_snapshot(env: &Env) -> RateSnapshot {
 /// Computes the global borrow rate directly from current aggregate storage.
 pub fn uncached_borrow_rate(env: &Env) -> i128 {
     let snapshot = load_rate_snapshot(env);
+    compute_borrow_rate_from_snapshot(&snapshot).rate_bps
+}
 
-    match snapshot.params {
-        Some(p) => {
-            let utilization_bps = if snapshot.total_supply > 0 {
-                snapshot.total_debt.saturating_mul(BPS_DENOM) / snapshot.total_supply
-            } else {
-                0
-            };
-            rate_model::compute_borrow_rate(utilization_bps, &p)
-        }
+/// Computes utilization and borrow rate from a preloaded aggregate snapshot.
+///
+/// Utilization uses checked arithmetic and falls back to zero when supply is
+/// non-positive. Overflow in `debt * 10_000` returns [`DebtError::Overflow`].
+pub(crate) fn try_compute_borrow_rate_from_snapshot(
+    snapshot: &RateSnapshot,
+) -> Result<BorrowRateComputation, DebtError> {
+    let utilization_bps = if snapshot.total_supply > 0 {
+        snapshot
+            .total_debt
+            .checked_mul(BPS_DENOM)
+            .ok_or(DebtError::Overflow)?
+            .checked_div(snapshot.total_supply)
+            .ok_or(DebtError::Overflow)?
+    } else {
+        0
+    };
+
+    let rate_bps = match &snapshot.params {
+        Some(p) => rate_model::compute_borrow_rate(utilization_bps, p),
         None => DEFAULT_APR_BPS,
-    }
+    };
+
+    Ok(BorrowRateComputation {
+        utilization_bps,
+        rate_bps,
+    })
+}
+
+/// Computes utilization and borrow rate from a preloaded aggregate snapshot.
+///
+/// Panics on arithmetic overflow, matching the existing borrow-rate API shape
+/// while keeping the underlying arithmetic checked.
+pub(crate) fn compute_borrow_rate_from_snapshot(snapshot: &RateSnapshot) -> BorrowRateComputation {
+    try_compute_borrow_rate_from_snapshot(snapshot).expect("borrow-rate utilization overflow")
+}
+
+fn uncached_borrow_rate_computation(env: &Env) -> BorrowRateComputation {
+    let snapshot = load_rate_snapshot(env);
+    compute_borrow_rate_from_snapshot(&snapshot)
 }
 
 /// Returns the global borrow rate, computing it at most once per ledger.
 ///
 /// The temporary-storage key includes `env.ledger().sequence()`, so advancing
 /// the ledger naturally misses the previous cache entry and recomputes from a
-/// fresh `RateSnapshot`.
+/// fresh `RateSnapshot`. Each cache miss also writes one utilization sample for
+/// the current ledger into the bounded utilization-history ring buffer.
 pub fn cached_borrow_rate(env: &Env) -> i128 {
     let ledger_sequence = env.ledger().sequence();
     let key = DataKey::BorrowRateCache(ledger_sequence);
@@ -154,13 +195,14 @@ pub fn cached_borrow_rate(env: &Env) -> i128 {
         }
     }
 
-    let rate_bps = uncached_borrow_rate(env);
+    let computation = uncached_borrow_rate_computation(env);
+    write_utilization_sample(env, computation.utilization_bps);
     let cache = BorrowRateCache {
         ledger_sequence,
-        rate_bps,
+        rate_bps: computation.rate_bps,
     };
     env.storage().temporary().set(&key, &cache);
-    rate_bps
+    computation.rate_bps
 }
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
