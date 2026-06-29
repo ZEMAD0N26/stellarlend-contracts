@@ -391,27 +391,21 @@ impl Bridge {
         self.paused_validators.iter().cloned().collect()
     }
 
-    /// Verify a quorum proof from the current validator set over the (new_set, epoch) payload.
-    ///
-    /// Paused validator signatures are *silently skipped* — they are neither
-    /// verified nor counted toward the quorum, and they do not cause the
-    /// overall proof to fail. Skipping (rather than rejecting on sight) is a
-    /// deliberate choice: a compromised key may still be present in the
-    /// relay-network gossip, so silently ignoring it lets a bridge keep
-    /// operating under quorum with a known-compromised signer excluded. The
-    /// effective quorum threshold is recomputed from the active (non-paused)
-    /// validator subset.
-    /// Builds the canonical, domain-separated payload that quorum proofs sign
-    /// over (issue #1146):
+    /// Builds the canonical, domain-separated payload for a validator-set
+    /// rotation quorum proof.
     ///
     /// ```text
     ///   payload = bincode((QUORUM_PROOF_DOMAIN, bridge_id, new_set_bytes, epoch))
     /// ```
     ///
-    /// Prefixing the constant [`QUORUM_PROOF_DOMAIN`] tag and the per-instance
-    /// `bridge_id` makes a signature valid **only** for this bridge instance and
-    /// this purpose. Signers and verifiers must both go through this function so
-    /// the bytes always match.
+    /// `bridge_id` identifies the deployment, `new_set_bytes` preserves the
+    /// proposed set's storage order, and `epoch` is the exact successor epoch.
+    /// Current active validators must all sign the identical bytes returned by
+    /// this function; changing any field invalidates the signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload cannot be serialized.
     pub fn quorum_proof_payload(
         bridge_id: &[u8],
         new_set: &ValidatorSet,
@@ -425,11 +419,13 @@ impl Bridge {
         ))?)
     }
 
-    /// Verify a quorum proof from the current validator set over the (new_set, epoch) payload.
+    /// Verifies that current active validators authorized `new_set` for
+    /// `epoch` with a strict supermajority quorum proof.
     ///
-    /// Paused validator signatures are *silently skipped* — they are neither
-    /// verified nor counted toward the quorum, and they do not cause the
-    /// overall proof to fail.
+    /// Signers must belong to the current set. Duplicate active signers count
+    /// once, paused signers are skipped, and every counted Ed25519 signature
+    /// must verify against [`Bridge::quorum_proof_payload`]. The proof succeeds
+    /// when unique valid active signers meet [`Bridge::effective_threshold`].
     fn verify_quorum_proof(
         &self,
         new_set: &ValidatorSet,
@@ -488,8 +484,11 @@ impl Bridge {
         self.max_churn = max_churn;
     }
 
-    /// Rotate validators to `new_set` at `next_epoch` if `proofs` from current set form a quorum.
-    /// The `epoch` must be exactly current_epoch + 1.
+    /// Applies a validator-set rotation authorized by the current active set.
+    ///
+    /// `epoch` must equal `self.epoch + 1`. `proofs` must contain a strict
+    /// supermajority of unique valid signatures from current active validators
+    /// over the canonical `(domain, bridge_id, new_set, epoch)` payload.
     ///
     /// # Security validation
     ///
@@ -518,7 +517,18 @@ impl Bridge {
     /// Also enforces the `max_churn` limit (if configured) on the symmetric difference
     /// between the current validator set and the new validator set.
     ///
-    /// Returns the computed churn count on success.
+    /// On success, the validator set and epoch advance atomically and stale
+    /// pause flags are cleared. On failure, those fields remain unchanged.
+    ///
+    /// # Returns
+    ///
+    /// Returns the symmetric-difference churn count between the old and new
+    /// validator sets.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-successor epoch, an out-of-bounds or duplicate-key set, a
+    /// churn-limit violation, or an invalid/insufficient quorum proof.
     pub fn rotate_validators(
         &mut self,
         new_set: ValidatorSet,
@@ -701,7 +711,11 @@ impl Bridge {
         })
     }
 
-    /// Verify inbound message signature epoch. Messages signed with an epoch < current epoch are rejected.
+    /// Rejects an inbound message epoch that belongs to a retired validator set.
+    ///
+    /// An epoch lower than [`Bridge::epoch`] fails. The current epoch and future
+    /// epochs pass this narrow guard, so callers must separately authenticate
+    /// the inbound message and enforce equality if their policy requires it.
     pub fn validate_inbound_epoch(&self, signed_epoch: u64) -> Result<()> {
         if signed_epoch < self.epoch {
             return Err(anyhow!("message signed by retired validator set (epoch too old)"));
@@ -880,6 +894,9 @@ fn lowercase_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod rotation_test;
+
+#[cfg(test)]
+mod rotation_doc_test;
 
 #[cfg(test)]
 mod domain_separation_test;
