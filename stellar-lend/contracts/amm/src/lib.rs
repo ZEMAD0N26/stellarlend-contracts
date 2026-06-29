@@ -10,6 +10,8 @@ mod fee_accrual_test;
 #[cfg(test)]
 mod flash_swap_atomicity_test;
 #[cfg(test)]
+mod flash_swap_caller_binding_test;
+#[cfg(test)]
 mod flash_swap_protocol_doctest;
 #[cfg(test)]
 mod flash_swap_test;
@@ -78,6 +80,11 @@ pub const IMPACT_GUARD_DISABLED: u32 = u32::MAX;
 // callback chain.
 const KEY_FLASH_ACTIVE: (&str, &str) = ("pool", "flash_active");
 const KEY_K_BEFORE: (&str, &str) = ("pool", "flash_k_before");
+/// Address that initiated the current flash swap.  Stored alongside
+/// `KEY_FLASH_ACTIVE` so `repay_flash_swap` can enforce that only the
+/// original caller (who received the optimistically-debited tokens) may
+/// complete the swap.  Cleared when the swap completes or reverts.
+const KEY_FLASH_INITIATOR: (&str, &str) = ("pool", "flash_initiator");
 
 // Per-side swap fee accumulators.
 //
@@ -111,6 +118,8 @@ pub enum AmmPoolError {
     InvariantViolation = 5,
     /// Reentrant flash swap detected
     ReentrantFlashSwap = 6,
+    /// Caller is not the flash-swap initiator
+    UnauthorizedCaller = 7,
 }
 
 #[contract]
@@ -365,6 +374,12 @@ impl AmmContract {
     /// matching `repay_flash_swap` can enforce
     /// `(reserve_a + amount_in) * reserve_b_after_debit  >=  k_before`.
     ///
+    /// The caller's address is recorded as the **initiator** so that only
+    /// the same address may call [`repay_flash_swap`](AmmContract::repay_flash_swap).
+    /// This prevents a third party from observing an in-flight flash swap
+    /// and calling `repay_flash_swap` (or otherwise interfering) within
+    /// the same transaction.
+    ///
     /// Soroban 25.3.1 does not allow a contract to invoke itself from
     /// inside a callback (`Contract re-entry is not allowed`), so this
     /// design dispatches the two halves of the flash swap as separate
@@ -445,6 +460,10 @@ impl AmmContract {
         env.storage().persistent().set(&KEY_K_BEFORE, &k_before);
         env.storage().persistent().set(&KEY_RES_B, &new_rb);
         env.storage().instance().set(&KEY_FLASH_ACTIVE, &true);
+        // Record the initiator so only this address may repay.
+        env.storage()
+            .instance()
+            .set(&KEY_FLASH_INITIATOR, &env.current_contract_address());
 
         Ok(amount_out)
     }
@@ -460,6 +479,11 @@ impl AmmContract {
     /// the optimistic reserve debit) — leaving the pool exactly where it
     /// started.
     ///
+    /// Only the address that initiated the flash swap (recorded by
+    /// [`flash_swap_a_for_b`](AmmContract::flash_swap_a_for_b)) may call
+    /// this function.  Any other caller is rejected with
+    /// [`AmmPoolError::UnauthorizedCaller`].
+    ///
     /// The minimum `amount_in` that satisfies the invariant is:
     /// ```text
     /// amount_in_min = ⌈ reserve_a × amount_out / (reserve_b − amount_out) ⌉
@@ -472,6 +496,7 @@ impl AmmContract {
     /// # Panics
     /// - `"repay_flash_swap: amount_in must be positive"` — `amount_in ≤ 0`.
     /// - `"repay_flash_swap: no flash swap in progress"` — called outside a flash swap.
+    /// - `"UnauthorizedCaller: repay_flash_swap must be called by the flash-swap initiator"` — caller mismatch.
     /// - `"Invariant violation: k decreased during flash-swap repayment"` — under-repayment;
     ///   Soroban then rolls back all storage changes, including the Op-1 debit.
     ///
@@ -489,6 +514,21 @@ impl AmmContract {
             // No flash swap in progress is an invariant violation of the expected call sequence
             return Err(AmmPoolError::InvariantViolation);
         }
+
+        // Enforce that only the original initiator may repay.  This
+        // prevents a third party from observing an in-flight flash swap
+        // and calling `repay_flash_swap` to interfere.
+        let initiator: Address = env
+            .storage()
+            .instance()
+            .get(&KEY_FLASH_INITIATOR)
+            .ok_or(AmmPoolError::InvariantViolation)?;
+        let caller = env.current_contract_address();
+        if caller != initiator {
+            return Err(AmmPoolError::UnauthorizedCaller);
+        }
+        // Require explicit authorization from the initiator.
+        initiator.require_auth();
 
         let ra: i128 = env.storage().persistent().get(&KEY_RES_A).unwrap_or(0);
         let rb: i128 = env.storage().persistent().get(&KEY_RES_B).unwrap_or(0);
@@ -513,6 +553,7 @@ impl AmmContract {
 
         env.storage().persistent().set(&KEY_RES_A, &new_ra);
         env.storage().instance().set(&KEY_FLASH_ACTIVE, &false);
+        env.storage().instance().remove(&KEY_FLASH_INITIATOR);
         Ok(())
     }
 
