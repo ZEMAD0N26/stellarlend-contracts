@@ -27,6 +27,7 @@ The versioning strategy is minimal by design:
 | `WithdrawEvent` | 1 | Versioned withdraw event with user and new collateral balance. |
 | `BorrowEvent` | 1 | Versioned borrow event with user and new debt balance. |
 | `RepayEvent` | 1 | Versioned repay event with user and new debt balance. |
+| `RateUpdatedEvent` | 1 | Versioned rate-update event with utilisation, target rate, applied rate, and ledger (see `rate_model.rs`). |
 
 All other events are unversioned (no `schema_version` field). They follow an
 additive-only policy: new fields may be appended but existing fields will not

@@ -1,6 +1,7 @@
 #![no_std]
 
 mod debt;
+pub mod rate_model;
 pub mod rounding_strategy;
 
 use crate::debt::{DebtPosition, load_debt, save_debt, repay_amount, effective_debt, DEFAULT_APR_BPS};
@@ -12,10 +13,18 @@ use debt::{
     borrow_amount, effective_debt, load_debt, repay_amount, save_debt, DebtPosition,
     DEFAULT_APR_BPS,
 };
+
+#[cfg(test)]
+mod rate_updated_event_test;
+
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, Env,
     IntoVal, Symbol,
 };
+
+// Re-export the event so downstream crates and indexers can import it
+// without navigating the module path.
+pub use rate_model::RateUpdatedEvent;
 
 /// Maximum desired persistent TTL for position entries, in ledgers.
 /// We bound the extension by the network's `max_ttl` to remain compatible
