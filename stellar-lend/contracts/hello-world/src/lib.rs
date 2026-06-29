@@ -2,9 +2,21 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Map,
-    Symbol, Vec,
+mod cross_asset;
+mod deposit;
+mod risk_management;
+
+use cross_asset::{
+    add_to_user_debt_list, get_max_debt_assets_per_user, get_user_debt_assets,
+    set_max_debt_assets_per_user, CrossAssetError,
+};
+use deposit::deposit_collateral;
+use risk_management::{
+    can_be_liquidated, get_close_factor, get_liquidation_incentive,
+    get_liquidation_incentive_amount, get_liquidation_threshold, get_max_liquidatable_amount,
+    get_min_collateral_ratio, initialize_risk_management, is_emergency_paused, is_operation_paused,
+    require_min_collateral_ratio, set_emergency_pause, set_pause_switch, set_pause_switches,
+    set_risk_params, RiskConfig, RiskManagementError,
 };
 
 #[contracterror]
@@ -1284,123 +1296,66 @@ impl HelloContract {
     pub fn gov_can_vote(env: Env, voter: Address, proposal_id: u64) -> bool {
         governance::can_vote(&env, voter, proposal_id)
     }
-}
 
-#[cfg(test)]
-mod flash_loan_test;
-#[cfg(test)]
-mod test_reentrancy;
-
-#[cfg(test)]
-mod amm_pause_integration_test;
-#[cfg(test)]
-mod claim_reserves_test;
-
-#[cfg(test)]
-mod gov_can_vote_test;
-// mod governance_test;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_borrow_and_repay() {
-        let (_env, client, _admin, user) = setup();
-        assert_eq!(client.borrow(&user, &200), 200);
-        assert_eq!(client.repay(&user, &75), 125);
+    /// Set the maximum number of distinct debt assets a user may hold simultaneously (admin only).
+    ///
+    /// Pass `None` to remove the cap (unlimited).  When a value is provided it must be >= 1.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin address
+    /// * `max`    - New cap, or None to disable
+    ///
+    /// # Returns
+    /// Returns Ok(()) on success
+    pub fn set_max_debt_assets_per_user(
+        env: Env,
+        caller: Address,
+        max: Option<u32>,
+    ) -> Result<(), CrossAssetError> {
+        set_max_debt_assets_per_user(&env, &caller, max)
     }
 
-    #[test]
-    fn test_get_state_default() {
-        let (_env, client, _admin, user) = setup();
-        let s = client.get_state(&user);
-        assert_eq!(s.balance, 0);
-        assert_eq!(s.debt, 0);
+    /// Get the current maximum-distinct-debt-assets cap.
+    ///
+    /// Returns None when no cap is configured (unlimited behaviour).
+    pub fn get_max_debt_assets_per_user(env: Env) -> Option<u32> {
+        get_max_debt_assets_per_user(&env)
     }
 
-    #[test]
-    fn test_get_state_after_actions() {
-        let (_env, client, _admin, user) = setup();
-        client.deposit(&user, &500);
-        client.borrow(&user, &100);
-        let s = client.get_state(&user);
-        assert_eq!(s.balance, 500);
-        assert_eq!(s.debt, 100);
+    /// Record that `user` now has an active borrow in `asset`.
+    ///
+    /// Enforces the borrow-isolation tier if a cap is configured.
+    /// This must be called from `borrow_asset_internal` whenever a borrow
+    /// would introduce a *new* debt asset for the user.
+    ///
+    /// Repay / withdraw paths must never call this function — they are
+    /// never restricted by the isolation tier.
+    ///
+    /// # Arguments
+    /// * `user`  - The borrowing user
+    /// * `asset` - The asset being borrowed (None = native XLM)
+    ///
+    /// # Returns
+    /// Returns the updated count of distinct debt assets, or an error
+    pub fn add_to_user_debt_list(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+    ) -> Result<u32, CrossAssetError> {
+        add_to_user_debt_list(&env, &user, &asset)
     }
 
-    #[test]
-    fn test_deposit_rejects_zero_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.deposit(&user, &0);
-        }));
-        assert!(result.is_err(), "deposit should panic with zero amount");
-    }
-
-    #[test]
-    fn test_deposit_rejects_negative_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.deposit(&user, &-100);
-        }));
-        assert!(result.is_err(), "deposit should panic with negative amount");
-    }
-
-    #[test]
-    fn test_withdraw_rejects_zero_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.withdraw(&user, &0);
-        }));
-        assert!(result.is_err(), "withdraw should panic with zero amount");
-    }
-
-    #[test]
-    fn test_withdraw_rejects_negative_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.withdraw(&user, &-100);
-        }));
-        assert!(
-            result.is_err(),
-            "withdraw should panic with negative amount"
-        );
-    }
-
-    #[test]
-    fn test_borrow_rejects_zero_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.borrow(&user, &0);
-        }));
-        assert!(result.is_err(), "borrow should panic with zero amount");
-    }
-
-    #[test]
-    fn test_borrow_rejects_negative_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.borrow(&user, &-100);
-        }));
-        assert!(result.is_err(), "borrow should panic with negative amount");
-    }
-
-    #[test]
-    fn test_repay_rejects_zero_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.repay(&user, &0);
-        }));
-        assert!(result.is_err(), "repay should panic with zero amount");
-    }
-
-    #[test]
-    fn test_repay_rejects_negative_amount() {
-        let (_env, client, _admin, user) = setup();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.repay(&user, &-100);
-        }));
-        assert!(result.is_err(), "repay should panic with negative amount");
+    /// Return the list of distinct debt assets currently tracked for `user`.
+    ///
+    /// # Arguments
+    /// * `user` - The user whose debt list to query
+    pub fn get_user_debt_assets(env: Env, user: Address) -> soroban_sdk::Vec<Option<Address>> {
+        get_user_debt_assets(&env, &user)
     }
 }
+
+#[cfg(test)]
+mod test;
+
+#[cfg(test)]
+mod borrow_isolation_tier_test;
