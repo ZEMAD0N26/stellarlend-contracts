@@ -96,3 +96,56 @@ These parameters are designed to balance:
 Changes to these values should be governed carefully to avoid unintended economic consequences.
 
 **Security Note:** The debt ceiling and deposit cap provide a critical safety mechanism. If a price oracle fails or is compromised, these limits prevent unbounded protocol exposure. The admin should monitor utilization and adjust caps as the protocol scales.
+
+---
+
+## Kink Utilization Rate Model
+
+The protocol uses a **two-slope kink rate model** to compute dynamic borrow interest based on pool utilization. This replaces the static default APR (`DEFAULT_APR_BPS = 500` = 5%) when `set_rate_params` has been called by the admin.
+
+### Formula
+
+```
+utilization = total_borrow / total_supply
+
+if utilization <= kink_utilization:
+    rate = base_rate + utilization * multiplier
+else:
+    rate = base_rate + kink_utilization * multiplier + (utilization - kink_utilization) * jump_multiplier
+
+final_rate = clamp(rate, rate_floor, rate_ceiling)
+```
+
+All values are in basis points (1 bps = 0.01%).
+
+### Parameters
+
+| Parameter | Description | Default (bps) | Admin Setter |
+|-----------|-------------|---------------|--------------|
+| `base_rate_bps` | Minimum borrow rate at 0% utilization | 100 (1%) | `set_rate_params()` |
+| `kink_utilization_bps` | Utilization threshold where slope increases | 8 000 (80%) | `set_rate_params()` |
+| `multiplier_bps` | Slope before kink (per-basis-point of utilization) | 2 000 (20%) | `set_rate_params()` |
+| `jump_multiplier_bps` | Slope after kink (per-basis-point of excess utilization) | 10 000 (100%) | `set_rate_params()` |
+| `rate_floor_bps` | Hard floor on computed rate | 50 (0.5%) | `set_rate_params()` |
+| `rate_ceiling_bps` | Hard ceiling on computed rate | 10 000 (100%) | `set_rate_params()` |
+
+### Curve Shape
+
+- **Below kink (utilization ≤ 80%)**: Rate = base_rate + utilization × multiplier. Linear, gentle slope (e.g., at 50% utilization: 100 + 5000×2000/10000 = 1100 bps = 11%).
+- **At kink (utilization = 80%)**: Rate = 100 + 8000×2000/10000 = 1700 bps = 17%.
+- **Above kink (utilization > 80%)**: The jump_multiplier kicks in, creating a steep slope to incentivize depositors and discourage additional borrowing near full utilization.
+- **Guards**: The rate is always clamped to `[rate_floor_bps, rate_ceiling_bps]`, preventing negative rates and unbounded APRs.
+
+### Monotonicity Invariant
+
+The `compute_borrow_rate` function is **monotonic non-decreasing** in utilization: if `utilization_a ≤ utilization_b`, then `rate_a ≤ rate_b`. This invariant is verified with 256-case property-based tests in `rate_model.rs::monotonicity`.
+
+### Configuration
+
+The admin calls `set_rate_params(params)` to configure the model. Until called, the contract falls back to the static `DEFAULT_APR_BPS` constant (500 bps = 5%) for backward compatibility.
+
+### Source
+
+- Rate computation: `stellar-lend/contracts/lending/src/rate_model.rs`
+- Integration: `stellar-lend/contracts/lending/src/lib.rs` (`set_rate_params`, `get_rate_params`, `get_borrow_rate` entry points; `current_borrow_rate` helper)
+- Property tests: `rate_model.rs::monotonicity`

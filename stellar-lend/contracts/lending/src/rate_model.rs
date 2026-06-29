@@ -1,282 +1,169 @@
-// ════════════════════════════════════════════════════════════════
-// RATE MODEL — Dynamic interest rate with EMA smoothing
-// ════════════════════════════════════════════════════════════════
-//
-// This module implements a utilization-based interest rate model
-// with exponential moving average (EMA) smoothing. The smoothed
-// rate is persisted in instance storage and a versioned
-// `RateUpdatedEvent` is emitted each time the rate changes.
-//
-// ## Design
-//
-// 1. **Utilisation** is computed as `total_debt / total_deposits`
-//    (in basis points, e.g. 8000 = 80%).
-// 2. **Target rate** follows a piecewise linear (kink) model:
-//    - Below target utilisation → slope = `SLOPE1`
-//    - Above target utilisation → slope = `SLOPE2` (steeper)
-// 3. **EMA smoothing** blends the target into the historical
-//    smoothed rate so that the on-chain rate does not jump
-//    abruptly.
-// 4. A **versioned `RateUpdatedEvent`** is emitted only when the
-//    persisted smoothed rate actually changes, preventing event
-//    spam on no-op updates.
-//
-// ## Edge cases
-//
-// - **Zero deposits**: utilisation is 0 → rate falls to BASE_RATE.
-// - **Uninitialised smoothing state**: the first call sets the
-//   smoothed rate equal to the target rate (no EMA blending).
-// - **Rate unchanged**: if the computed smoothed rate is
-//   identical to the stored value, no event is emitted.
+#[allow(unused_imports)]
+use soroban_sdk::{contracttype, Env};
+use stellar_lend_common::BPS_DENOM;
 
-use soroban_sdk::{contractevent, contracttype, Env, Symbol};
-
-use crate::DataKey;
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Schema version for versioned events. Must be bumped on breaking changes
-/// to the `RateUpdatedEvent` payload.
-pub const EVENT_SCHEMA_VERSION: u32 = 1;
-
-/// Target utilisation in basis points (8000 = 80%).
-pub const TARGET_UTILIZATION_BPS: i128 = 8000;
-
-/// EMA smoothing factor in basis points (1000 = 0.1).
-/// Higher values make the rate respond faster to utilisation changes.
-pub const SMOOTHING_FACTOR_BPS: i128 = 1000;
-
-/// Base (minimum) rate in basis points (50 = 0.5%).
-pub const BASE_RATE_BPS: i128 = 50;
-
-/// Slope below target utilisation (per unit utilisation in BPS).
-pub const SLOPE1_BPS: i128 = 50; // 0.5% per 1% utilisation below target
-
-/// Slope above target utilisation (per unit utilisation in BPS).
-/// Equal to the *additional* rate applied once utilisation reaches 100 %
-/// (since `(util - target) / (BPS_SCALE - target) = 1` at full util).
-pub const SLOPE2_BPS: i128 = 300; // 3% per 1% utilisation above target
-
-/// Maximum allowed rate in basis points (5000 = 50%).
-pub const MAX_RATE_BPS: i128 = 5000;
-
-/// Scale for basis-point arithmetic.
-pub const BPS_SCALE: i128 = 10_000;
-
-/// Storage key for the rate smoothing state.
-const RATE_SMOOTHING_KEY: &str = "RateSmooth";
-
-// ---------------------------------------------------------------------------
-// Storage types
-// ---------------------------------------------------------------------------
-
-/// Persisted smoothing state for the rate model.
-///
-/// Stored in instance storage under the `RATE_SMOOTHING_KEY` Symbol.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RateSmoothingState {
-    /// The current smoothed interest rate in basis points.
-    pub smoothed_rate_bps: i128,
-    /// Ledger timestamp of the last update.
-    pub last_update: u64,
-    /// Utilisation ratio at the last update, in basis points.
-    pub utilization_bps: i128,
+pub struct RateParams {
+    pub base_rate_bps: i128,
+    pub kink_utilization_bps: i128,
+    pub multiplier_bps: i128,
+    pub jump_multiplier_bps: i128,
+    pub rate_floor_bps: i128,
+    pub rate_ceiling_bps: i128,
+    pub max_rate_change_per_ledger_bps: i128,
+    pub hysteresis_bps: i128,
 }
 
-// ---------------------------------------------------------------------------
-// Event
-// ---------------------------------------------------------------------------
-
-/// Emitted when the smoothed rate changes after an `update_and_get_rate` call.
-///
-/// # Fields
-/// - `schema_version` — Event schema version (currently `1`). Indexers must
-///   check this before decoding the rest of the payload.
-/// - `utilization_bps` — Current pool utilisation in basis points.
-/// - `target_rate_bps` — The target (pre-smoothing) rate in basis points.
-/// - `applied_rate_bps` — The smoothed rate that was persisted, in BPS.
-/// - `ledger` — Ledger sequence number at which this event was emitted.
-#[contractevent]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RateUpdatedEvent {
-    pub schema_version: u32,
-    pub utilization_bps: i128,
-    pub target_rate_bps: i128,
-    pub applied_rate_bps: i128,
-    pub ledger: u32,
-}
-
-// ---------------------------------------------------------------------------
-// Rate computation helpers
-// ---------------------------------------------------------------------------
-
-/// Compute the target interest rate (in basis points) from the current
-/// utilisation using a piecewise linear (kink) model.
-///
-/// - If `utilization_bps <= TARGET_UTILIZATION_BPS`:
-///   `rate = BASE_RATE + utilization_bps * SLOPE1_BPS / TARGET_UTILIZATION_BPS`
-/// - If `utilization_bps > TARGET_UTILIZATION_BPS`:
-///   `rate = BASE_RATE + SLOPE1_BPS + (utilization_bps - target) * SLOPE2_BPS / (BPS_SCALE - TARGET_UTILIZATION_BPS)`
-///
-/// The result is capped at `MAX_RATE_BPS`. The `MAX_RATE_BPS` cap is a
-/// safety ceiling that is intentionally higher than the rate the model
-/// produces at 100 % utilisation under the default constants; this gives
-/// headroom for future governance-tuned slope changes without code edits.
-pub fn compute_target_rate(utilization_bps: i128) -> i128 {
-    if utilization_bps <= TARGET_UTILIZATION_BPS {
-        // Ramp from BASE_RATE up to (BASE_RATE + SLOPE1) as utilisation
-        // approaches the target.
-        let scaled = utilization_bps
-            .checked_mul(SLOPE1_BPS)
-            .unwrap_or(0)
-            .checked_div(TARGET_UTILIZATION_BPS)
-            .unwrap_or(0);
-        let rate = BASE_RATE_BPS.saturating_add(scaled);
-        rate.min(MAX_RATE_BPS)
-    } else {
-        // Above-target utilisation increases the slope.
-        let excess = utilization_bps.saturating_sub(TARGET_UTILIZATION_BPS);
-        let max_excess = BPS_SCALE.saturating_sub(TARGET_UTILIZATION_BPS);
-        let scaled = if max_excess > 0 {
-            excess
-                .checked_mul(SLOPE2_BPS)
-                .unwrap_or(0)
-                .checked_div(max_excess)
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        let rate = BASE_RATE_BPS
-            .saturating_add(SLOPE1_BPS)
-            .saturating_add(scaled);
-        rate.min(MAX_RATE_BPS)
-    }
-}
-
-/// Load the persisted smoothing state, returning `None` if it has never been
-/// written (uninitialised).
-fn load_smoothing_state(env: &Env) -> Option<RateSmoothingState> {
-    env.storage()
-        .instance()
-        .get::<Symbol, RateSmoothingState>(&Symbol::new(env, RATE_SMOOTHING_KEY))
-}
-
-/// Persist the smoothing state to instance storage.
-fn save_smoothing_state(env: &Env, state: &RateSmoothingState) {
-    env.storage()
-        .instance()
-        .set(&Symbol::new(env, RATE_SMOOTHING_KEY), state);
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Read the current utilisation ratio (in basis points) from storage.
-///
-/// Returns `0` when there are no deposits (division-by-zero guard).
-pub fn current_utilization(env: &Env) -> i128 {
-    let total_debt: i128 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::TotalDebt)
-        .unwrap_or(0);
-    let total_deposits: i128 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::TotalDeposits)
-        .unwrap_or(0);
-
-    if total_deposits > 0 {
-        total_debt
-            .checked_mul(BPS_SCALE)
-            .unwrap_or(0)
-            .checked_div(total_deposits)
-            .unwrap_or(0)
-    } else {
-        0
-    }
-}
-
-/// Update the smoothed interest rate based on the current pool utilisation
-/// and emit a `RateUpdatedEvent` **only when the persisted rate changes**.
-///
-/// # Returns
-/// The current smoothed rate in basis points.
-///
-/// # Panics
-/// Never panics — all arithmetic uses saturating/checked operations and falls
-/// back to `BASE_RATE_BPS` if storage is inconsistent.
-///
-/// # Events
-/// Emits a `RateUpdatedEvent` whenever the computed smoothed rate differs
-/// from the previously persisted value, or on the first call (no prior state).
-pub fn update_and_get_rate(env: &Env) -> i128 {
-    // 1. Compute current utilisation
-    let utilization_bps = current_utilization(env);
-
-    // 2. Compute the target (pre-smoothing) rate
-    let target_rate_bps = compute_target_rate(utilization_bps);
-
-    // 3. Load previous smoothing state and compute applied rate
-    let prev_state = load_smoothing_state(env);
-
-    let applied_rate_bps = match prev_state {
-        Some(ref state) => {
-            // EMA: new = alpha * target + (1 - alpha) * old
-            // SMOOTHING_FACTOR_BPS is alpha in BPS (e.g. 1000 = 0.1)
-            let alpha = SMOOTHING_FACTOR_BPS;
-            let one_minus_alpha = BPS_SCALE.saturating_sub(alpha);
-
-            let weighted_target = target_rate_bps
-                .checked_mul(alpha)
-                .unwrap_or(0);
-            let weighted_old = state
-                .smoothed_rate_bps
-                .checked_mul(one_minus_alpha)
-                .unwrap_or(0);
-
-            let blended = weighted_target
-                .saturating_add(weighted_old)
-                .checked_div(BPS_SCALE)
-                .unwrap_or(0);
-
-            blended.min(MAX_RATE_BPS)
+impl Default for RateParams {
+    fn default() -> Self {
+        Self {
+            base_rate_bps: 100,
+            kink_utilization_bps: 8_000,
+            multiplier_bps: 2_000,
+            jump_multiplier_bps: 10_000,
+            rate_floor_bps: 50,
+            rate_ceiling_bps: 10_000,
+            max_rate_change_per_ledger_bps: i128::MAX,
+            hysteresis_bps: 0,
         }
+    }
+}
+
+pub fn compute_borrow_rate(utilization_bps: i128, params: &RateParams) -> i128 {
+    let pre_kink_rate = params
+        .base_rate_bps
+        .checked_add(
+            utilization_bps
+                .min(params.kink_utilization_bps)
+                .checked_mul(params.multiplier_bps)
+                .unwrap()
+                .checked_div(BPS_DENOM)
+                .unwrap(),
+        )
+        .unwrap();
+
+    let raw_rate = if utilization_bps > params.kink_utilization_bps {
+        let excess = utilization_bps
+            .checked_sub(params.kink_utilization_bps)
+            .unwrap();
+        let jump = excess
+            .checked_mul(params.jump_multiplier_bps)
+            .unwrap()
+            .checked_div(BPS_DENOM)
+            .unwrap();
+        pre_kink_rate.checked_add(jump).unwrap()
+    } else {
+        pre_kink_rate
+    };
+    raw_rate
+        .max(params.rate_floor_bps)
+        .min(params.rate_ceiling_bps)
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RateModelKey {
+    LastRate,
+    LastTargetRate,
+    LastRateLedger,
+}
+
+pub fn apply_hysteresis(current: i128, target: i128, band: i128) -> i128 {
+    let band = band.max(0);
+    let diff = match target.checked_sub(current) {
+        Some(value) => value,
         None => {
-            // First call: no prior state, use target rate directly
-            target_rate_bps
+            if target >= current {
+                i128::MAX
+            } else {
+                i128::MIN
+            }
         }
     };
 
-    // 4. Determine whether the persisted rate actually changed
-    let rate_changed = prev_state
-        .as_ref()
-        .map(|s| s.smoothed_rate_bps != applied_rate_bps)
-        .unwrap_or(true); // First call always counts as a change
-
-    if rate_changed {
-        // 5. Persist the new smoothing state
-        let new_state = RateSmoothingState {
-            smoothed_rate_bps: applied_rate_bps,
-            last_update: env.ledger().timestamp(),
-            utilization_bps,
-        };
-        save_smoothing_state(env, &new_state);
-
-        // 6. Emit the versioned event
-        RateUpdatedEvent {
-            schema_version: EVENT_SCHEMA_VERSION,
-            utilization_bps,
-            target_rate_bps,
-            applied_rate_bps,
-            ledger: env.ledger().sequence(),
+    if diff >= 0 {
+        if diff <= band {
+            return current;
         }
-        .publish(env);
+        target.checked_sub(band).unwrap_or(target)
+    } else {
+        let abs_diff = diff.checked_abs().unwrap_or(i128::MAX);
+        if abs_diff <= band {
+            return current;
+        }
+        target.checked_add(band).unwrap_or(target)
     }
+}
 
-    applied_rate_bps
+pub fn compute_smoothed_rate(
+    last_rate: i128,
+    target_rate: i128,
+    max_step: i128,
+    elapsed: u32,
+    hysteresis_bps: i128,
+) -> i128 {
+    let adjusted_target = apply_hysteresis(last_rate, target_rate, hysteresis_bps);
+    if elapsed == 0 || max_step == i128::MAX {
+        return adjusted_target;
+    }
+    let max_change = max_step.saturating_mul(elapsed as i128);
+    let diff = adjusted_target
+        .checked_sub(last_rate)
+        .unwrap_or(if adjusted_target >= last_rate {
+            i128::MAX
+        } else {
+            i128::MIN
+        });
+
+    if diff > 0 {
+        last_rate
+            .checked_add(diff.min(max_change))
+            .unwrap_or(adjusted_target)
+    } else {
+        let decrease = diff.checked_abs().unwrap_or(i128::MAX).min(max_change);
+        last_rate.checked_sub(decrease).unwrap_or(adjusted_target)
+    }
+}
+
+pub fn update_and_get_rate(env: &Env, target_rate: i128, params: &RateParams) -> i128 {
+    let current_ledger = env.ledger().sequence();
+    let last_ledger = env
+        .storage()
+        .instance()
+        .get(&RateModelKey::LastRateLedger)
+        .unwrap_or(0);
+    let last_rate = if last_ledger == 0 {
+        target_rate
+    } else {
+        env.storage()
+            .instance()
+            .get(&RateModelKey::LastRate)
+            .unwrap_or(target_rate)
+    };
+    let elapsed = if last_ledger == 0 {
+        0
+    } else {
+        current_ledger.saturating_sub(last_ledger)
+    };
+    let new_rate = compute_smoothed_rate(
+        last_rate,
+        target_rate,
+        params.max_rate_change_per_ledger_bps,
+        elapsed,
+        params.hysteresis_bps,
+    );
+    let clamped_rate = new_rate
+        .max(params.rate_floor_bps)
+        .min(params.rate_ceiling_bps);
+    env.storage()
+        .instance()
+        .set(&RateModelKey::LastRate, &clamped_rate);
+    env.storage()
+        .instance()
+        .set(&RateModelKey::LastTargetRate, &target_rate);
+    env.storage()
+        .instance()
+        .set(&RateModelKey::LastRateLedger, &current_ledger);
+    clamped_rate
 }
