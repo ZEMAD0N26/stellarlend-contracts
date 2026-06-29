@@ -356,8 +356,33 @@ impl MultisigContract {
         if proposal.status != ProposalStatus::Active {
             panic!("ProposalNotPassed");
         }
-        proposal.status = ProposalStatus::Cancelled;
-        Self::save_proposal(&env, &proposal);
+    }
+}
+
+#[cfg(test)]
+mod quorum_edge_test;
+
+#[cfg(test)]
+mod signer_cooldown_test;
+
+#[cfg(test)]
+mod action_allowlist_test;
+
+#[cfg(test)]
+mod signer_shrink_guard_test;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger;
+
+    fn setup() -> (Env, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, MultisigContract);
+        (env, admin, contract_id)
     }
 
     // -----------------------------------------------------------------------
