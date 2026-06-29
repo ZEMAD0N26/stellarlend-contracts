@@ -124,8 +124,9 @@ const DEFAULT_DEPOSIT_CAP: i128 = 1_000_000_000_000;
 pub(crate) const HEALTH_FACTOR_SCALE: i128 = 10_000;
 const HEALTH_FACTOR_NO_DEBT: i128 = 100_000_000;
 pub const LIQUIDATION_THRESHOLD_BPS: i128 = 8000;
-/// Maximum fraction of debt that can be repaid in a single liquidation call (50 %).
-pub const CLOSE_FACTOR: i128 = 5000;
+const DEFAULT_LIQUIDATION_THRESHOLD_BPS: i128 = LIQUIDATION_THRESHOLD_BPS;
+const DEFAULT_CLOSE_FACTOR_BPS: i128 = 5000;
+const DEFAULT_LIQUIDATION_INCENTIVE_BPS: i128 = 1000;
 const DEFAULT_ORACLE_MAX_AGE_SECS: u64 = 3600;
 const ORACLE_SIGNATURE_DOMAIN: &[u8] = b"StellarLendOracle";
 const BPS_DENOM: i128 = 10_000;
@@ -168,30 +169,9 @@ pub enum DataKey {
     Guardian,
     PauseState(PauseType),
     RateParams,
-    /// Cross-asset: per-(user, asset) collateral balance.
-    CollateralAsset(Address, Address),
-    /// Cross-asset: per-(user, asset) debt position.
-    DebtAsset(Address, Address),
-    /// Per-asset risk parameters (ltv, liquidation threshold, debt ceiling).
-    AssetParams(Address),
-    /// List of assets for which a user holds non-zero collateral cross-asset.
-    UserCollateralAssets(Address),
-    /// List of assets for which a user holds non-zero debt cross-asset.
-    UserDebtAssets(Address),
-    /// Per-asset total outstanding debt (cross-asset tracking).
-    TotalDebtAsset(Address),
-    /// Insurance fund balance credited by governance or protocol fees (i128).
-    InsuranceFund,
-    /// Share of accrued interest (in basis points) routed into the insurance
-    /// fund on each settlement. Stored as `i128`; defaults to 0 when unset.
-    InsuranceShareBps,
-    /// Per-asset isolation-mode configuration (isolated flag + debt ceiling).
-    AssetIsolation(Address),
-    /// Running total of debt currently backed by this isolated asset.
-    /// Incremented on borrow, decremented on repay. Stored as `persistent`.
-    IsolationDebt(Address),
-    /// Ring-buffered protocol utilization samples, stored oldest-first.
-    UtilizationHistory,
+    LiquidationThresholdBps,
+    CloseFactorBps,
+    LiquidationIncentiveBps,
 }
 
 #[contractevent]
@@ -304,12 +284,7 @@ pub enum LendingError {
     InvalidFeeBps = 2005,
     InvalidFlashUtilizationBps = 2006,
     InsufficientCollateral = 2007,
-    /// Rejects a liquidation where the liquidator and borrower are the same address.
-    SelfLiquidation = 2008,
-    /// A borrow would push debt backed by an isolated asset beyond its
-    /// per-asset isolation debt ceiling.
-    IsolationCeilingExceeded = 2009,
-    InvalidIsolationCeiling = 2010,
+    InvalidLiquidationParams = 2010,
     InvalidOracleSignature = 5001,
     PriceOutOfBounds = 3004,
     PriceUnavailable = 3005,
@@ -1325,7 +1300,11 @@ impl LendingContract {
 
             require_no_active_flash_loan(&env);
 
-            let col_key = DataKey::Collateral(borrower.clone());
+        let threshold_bps = Self::get_liquidation_threshold_bps(&env);
+        let hf = collateral
+            .checked_mul(threshold_bps)
+            .and_then(|v| v.checked_div(debt))
+            .ok_or(LendingError::Overflow)?;
 
             let collateral: i128 = env.storage().persistent().get(&col_key).unwrap_or(0);
             let position = load_debt(&env, &borrower);
@@ -1342,11 +1321,22 @@ impl LendingContract {
                     .map_err(|_| LendingError::Overflow)?;
             save_debt(&env, &borrower, &settled_position);
 
-            let debt = settled_position.principal;
+        let close_factor_bps = Self::get_close_factor_bps(&env);
+        let max_repay = debt
+            .checked_mul(close_factor_bps)
+            .and_then(|v| v.checked_div(10000))
+            .ok_or(LendingError::Overflow)?;
+        let actual_repay = if amount > max_repay {
+            max_repay
+        } else {
+            amount
+        };
 
-            if debt == 0 {
-                return Err(LendingError::PositionHealthy);
-            }
+        let incentive_bps = Self::get_liquidation_incentive_bps(&env);
+        let seized_collateral = actual_repay
+            .checked_mul(10000 + incentive_bps)
+            .and_then(|v| v.checked_div(10000))
+            .ok_or(LendingError::Overflow)?;
 
             // Health-factor computation: floor rounding.
             // collateral * 8000 / debt — rounding down makes HF slightly lower,
@@ -1656,7 +1646,7 @@ impl LendingContract {
             .max(0);
 
         let health_factor = if debt > 0 {
-            col.checked_mul(LIQUIDATION_THRESHOLD_BPS)
+            col.checked_mul(Self::get_liquidation_threshold_bps(&env))
                 .map(|v| v / debt)
                 .unwrap_or(i128::MAX)
         } else {
@@ -1689,7 +1679,7 @@ impl LendingContract {
             .max(0);
 
         if debt > 0 {
-            col.checked_mul(LIQUIDATION_THRESHOLD_BPS)
+            col.checked_mul(Self::get_liquidation_threshold_bps(&env))
                 .map(|v| v / debt)
                 .unwrap_or(i128::MAX)
         } else {
