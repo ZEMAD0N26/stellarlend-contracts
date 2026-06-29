@@ -81,6 +81,8 @@ mod rate_cache_test;
 #[cfg(test)]
 mod rate_hysteresis_test;
 #[cfg(test)]
+mod rate_smoothing_state_test;
+#[cfg(test)]
 mod repay_debt_floor_test;
 #[cfg(test)]
 mod repay_overpay_test;
@@ -353,6 +355,25 @@ pub struct ProtocolMetrics {
     pub ledger: u32,
 }
 
+/// Versioned read model for borrow-rate smoothing state persisted by the rate model.
+///
+/// This struct is intentionally append-only for indexer stability. The
+/// `schema_version` field lets downstream decoders reject unknown future
+/// versions instead of guessing at field semantics.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RateSmoothingState {
+    /// Schema version for this view response. Version 1 contains the persisted
+    /// smoothed rate, last target rate, and last-update ledger.
+    pub schema_version: u32,
+    /// Last effective borrow rate persisted under `RateModelKey::LastRate`.
+    pub current_rate_bps: i128,
+    /// Last target rate persisted under `RateModelKey::LastTargetRate`.
+    pub last_target_rate_bps: i128,
+    /// Last ledger sequence persisted under `RateModelKey::LastRateLedger`.
+    pub last_update_ledger: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PositionSummary {
@@ -441,6 +462,33 @@ impl LendingContract {
             .persistent()
             .get(&DataKey::BadDebt)
             .unwrap_or(0i128)
+    }
+
+    /// Return the persisted borrow-rate smoothing state without recomputing rates.
+    ///
+    /// This view is intentionally read-only: it does not call `current_borrow_rate`,
+    /// does not write cache entries, and does not mutate rate-model storage. When
+    /// smoothing has never been initialized, all numeric state fields return `0`
+    /// with `schema_version = 1`.
+    pub fn get_rate_smoothing_state(env: Env) -> RateSmoothingState {
+        RateSmoothingState {
+            schema_version: SCHEMA_VERSION_V1,
+            current_rate_bps: env
+                .storage()
+                .instance()
+                .get(&rate_model::RateModelKey::LastRate)
+                .unwrap_or(0),
+            last_target_rate_bps: env
+                .storage()
+                .instance()
+                .get(&rate_model::RateModelKey::LastTargetRate)
+                .unwrap_or(0),
+            last_update_ledger: env
+                .storage()
+                .instance()
+                .get(&rate_model::RateModelKey::LastRateLedger)
+                .unwrap_or(0),
+        }
     }
 
     /// Set the configured oracle pubkey used to verify signed price updates.
