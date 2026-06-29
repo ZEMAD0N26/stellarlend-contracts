@@ -181,6 +181,8 @@ pub enum DataKey {
     /// Per-asset total outstanding debt (cross-asset tracking).
     TotalDebtAsset(Address),
     /// Insurance fund balance credited by governance or protocol fees (i128).
+    /// Per-asset total supplied collateral (cross-asset tracking).
+    TotalCollateralAsset(Address),
     InsuranceFund,
     /// Share of accrued interest (in basis points) routed into the insurance
     /// fund on each settlement. Stored as `i128`; defaults to 0 when unset.
@@ -433,6 +435,9 @@ pub struct AssetParams {
     /// Per-asset protocol borrow cap: maximum total outstanding debt for this asset.
     /// A value of 0 means uncapped (no limit enforced).
     pub borrow_cap: i128,
+    /// Per-asset protocol supply cap: maximum total collateral supplied for this asset.
+    /// A value of 0 means uncapped (no limit enforced).
+    pub supply_cap: i128,
 }
 
 #[contracttype]
@@ -451,6 +456,7 @@ pub struct AssetParamsSetEvent {
     pub liquidation_threshold_bps: i128,
     pub debt_ceiling: i128,
     pub borrow_cap: i128,
+    pub supply_cap: i128,
 }
 
 #[contractevent]
@@ -1375,7 +1381,9 @@ impl LendingContract {
             // Dust guard: a repay of 0 would make the liquidation a no-op.
             if actual_repay <= 0 {
                 return Err(LendingError::InvalidAmount);
-            }
+            }if supply_cap < 0 {
+    return Err(LendingError::InvalidAmount);
+}
 
             // Liquidation incentive: floor rounding.
             // actual_repay * 11000 / 10000 — rounding down means the liquidator
@@ -1539,7 +1547,7 @@ impl LendingContract {
     /// interaction during a protocol pause or emergency shutdown.
     pub fn repay_flash_loan(env: Env, payer: Address, asset: Address, amount: i128) {
         check_pause_status(&env, ProtocolAction::FlashLoan);
-        check_emergency_status(&env, ProtocolAction::FlashLoan);
+        check_emergency_status(grep -n -A10 "pub struct AssetParams" contracts/lending/src/lib.rs&env, ProtocolAction::FlashLoan);
         payer.require_auth();
         let payer_key = DataKey::Balance(asset.clone(), payer.clone());
         let payer_bal: i128 = env.storage().persistent().get(&payer_key).unwrap_or(0);
@@ -1602,7 +1610,9 @@ impl LendingContract {
         let new_tre_bal = tre_bal
             .checked_sub(amount)
             .expect("flash_loan: treasury underflow during transfer");
-        env.storage().persistent().set(&tre_key, &new_tre_bal);
+        env.storage().persistent().set(&tre_key,if supply_cap < 0 {
+    return Err(LendingError::InvalidAmount);
+} &new_tre_bal);
 
         let rec_key = DataKey::Balance(asset.clone(), receiver.clone());
         let rec_bal: i128 = env.storage().persistent().get(&rec_key).unwrap_or(0);
@@ -1746,7 +1756,9 @@ impl LendingContract {
         liquidation_threshold_bps: i128,
         debt_ceiling: i128,
         borrow_cap: i128,
+        supply_cap: i128,
     ) -> Result<(), LendingError> {
+        
         admin.require_auth();
         if admin != Self::get_admin(env.clone()) {
             return Err(LendingError::Unauthorized);
@@ -1764,11 +1776,15 @@ impl LendingContract {
             return Err(LendingError::InvalidAmount);
         }
 
+        if supply_cap < 0 {
+            return Err(LendingError::InvalidAmount);
+        }
         let params = AssetParams {
             ltv_bps,
             liquidation_threshold_bps,
             debt_ceiling,
             borrow_cap,
+             supply_cap,
         };
         cross_asset::set_asset_params_internal(&env, &asset, &params);
 
