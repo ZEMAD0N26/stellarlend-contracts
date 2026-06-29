@@ -56,6 +56,9 @@ pub enum BridgeError {
     NotPaused,
     /// Emitted when an outbound admission would exceed the configured cap.
     OutboundCapExceeded,
+    /// Emitted when an inbound admission would exceed the configured cap
+    /// or when the cap is configured as zero (fail-closed).
+    InboundCapExceeded,
 }
 
 impl std::fmt::Display for BridgeError {
@@ -99,6 +102,9 @@ impl std::fmt::Display for BridgeError {
             BridgeError::NotPaused => write!(f, "NotPaused: validator is not currently paused"),
             BridgeError::OutboundCapExceeded => {
                 write!(f, "OutboundCapExceeded: outbound admission would exceed the configured cap")
+            }
+            BridgeError::InboundCapExceeded => {
+                write!(f, "InboundCapExceeded: inbound cap exceeded for current window (fail-closed when cap is zero)")
             }
         }
     }
@@ -807,7 +813,7 @@ impl Bridge {
         }
 
         if self.max_per_window == 0 {
-            return Err(anyhow!("inbound cap is zero (fail-closed): no inbound transfers permitted"));
+            return Err(anyhow!(BridgeError::InboundCapExceeded));
         }
 
         self.roll_window_if_expired(current_time);
@@ -818,7 +824,7 @@ impl Bridge {
             .ok_or_else(|| anyhow!("inbound window total overflow"))?;
 
         if new_total > self.max_per_window {
-            return Err(anyhow!("inbound cap exceeded for current window"));
+            return Err(BridgeError::InboundCapExceeded.into());
         }
 
         self.window_inbound_total = new_total;
@@ -910,6 +916,9 @@ mod validator_pause_test;
 
 #[cfg(test)]
 mod rotation_churn_test;
+
+#[cfg(test)]
+mod inbound_window_integration_test;
 
 #[cfg(test)]
 mod tests {
