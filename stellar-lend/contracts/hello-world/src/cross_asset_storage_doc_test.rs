@@ -20,7 +20,7 @@ mod tests {
 
         // Write config
         let config = AssetConfig {
-            collateral_factor: 7500,
+            collateral_factor_bps: 7500,
             liquidation_threshold: 8000,
             max_supply: 1_000_000,
             max_borrow: 500_000,
@@ -39,7 +39,7 @@ mod tests {
             .persistent()
             .get::<CrossAssetDataKey, AssetConfig>(&CrossAssetDataKey::Config(asset.clone()))
             .unwrap();
-        assert_eq!(read_config.collateral_factor, config.collateral_factor);
+        assert_eq!(read_config.collateral_factor_bps, config.collateral_factor_bps);
         assert_eq!(read_config.liquidation_threshold, config.liquidation_threshold);
         assert_eq!(read_config.max_supply, config.max_supply);
         assert_eq!(read_config.max_borrow, config.max_borrow);
