@@ -2,18 +2,16 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Map,
+    Symbol, Vec,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum HelloError {
     InvalidAmount = 1,
 }
-
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, Map, Symbol, Vec,
-};
-use soroban_sdk::{contract, contractimpl, Address, Env, Map, Symbol, Vec};
 
 pub mod admin;
 pub mod amm;
@@ -77,6 +75,9 @@ mod rate_clamp_test;
 mod twap_view_test;
 #[cfg(test)]
 mod twap_maxbuffer_perf_test;
+#[cfg(test)]
+mod twap_coverage_test;
+#[cfg(test)]
 mod cross_asset_storage_doc_test;
 
 // Legacy test suite currently mismatches contract API and is excluded from CI compile.
@@ -84,20 +85,6 @@ mod cross_asset_storage_doc_test;
 // mod tests;
 
 use crate::oracle::FullOracleConfig;
-fn require_admin(env: &Env, caller: &Address) -> Result<(), RiskManagementError> {
-    caller.require_auth();
-    let admin_key = DepositDataKey::Admin;
-    let admin = env
-        .storage()
-        .persistent()
-        .get::<DepositDataKey, Address>(&admin_key)
-        .ok_or(RiskManagementError::Unauthorized)?;
-
-    if caller != &admin {
-        return Err(RiskManagementError::Unauthorized);
-    }
-    Ok(())
-}
 
 use borrow::borrow_asset;
 use deposit::deposit_collateral;
@@ -121,13 +108,11 @@ use crate::analytics::{
 };
 use crate::bridge::{BridgeConfig, BridgeError};
 use crate::config::{config_backup, config_get, config_restore, config_set, ConfigError};
-use crate::config_snapshot::{get_config_snapshot, ConfigSnapshot};
 use crate::cross_asset::{
     get_asset_config_by_address, get_asset_list, get_total_borrow_for, get_total_supply_for,
     get_user_asset_position, get_user_position_summary, initialize_asset, update_asset_config,
     update_asset_price, AssetConfig, AssetKey, AssetPosition, CrossAssetError, UserPositionSummary,
 };
-use crate::deposit::{DepositDataKey, ProtocolAnalytics};
 use crate::flash_loan::{
     configure_flash_loan, execute_flash_loan, repay_flash_loan, set_flash_loan_fee, FlashLoanConfig,
 };
@@ -135,7 +120,7 @@ use crate::flash_loan::{
 #[allow(unused_imports)]
 use bridge::{
     bridge_deposit, bridge_withdraw, get_bridge_config, list_bridges, register_bridge,
-    set_bridge_fee, BridgeConfig, BridgeError,
+    set_bridge_fee,
 };
 
 #[allow(unused_imports)]
@@ -144,14 +129,12 @@ use crate::interest_rate::{
     InterestRateError,
 };
 use crate::liquidate::liquidate;
-use crate::oracle::FullOracleConfig;
 use crate::risk_management::{
-    check_emergency_pause, initialize_risk_management, is_emergency_paused, is_operation_paused,
     require_admin, set_pause_switch, set_pause_switches, RiskConfig, RiskManagementError,
 };
 use crate::risk_params::{
     can_be_liquidated, get_liquidation_incentive_amount, get_max_liquidatable_amount,
-    initialize_risk_params, require_min_collateral_ratio, RiskParamsError,
+    initialize_risk_params, require_min_collateral_ratio,
 };
 use crate::storage::GuardianConfig;
 use crate::types::{
@@ -180,18 +163,19 @@ pub enum AmmError {
     SlippageExceeded = 3,
 }
 
-pub mod reentrancy;
-
 /// The StellarLend core contract.
 #[contract]
 pub struct HelloContract;
 
+/// Storage key for simple deposit/borrow balances.
+#[contracttype]
+pub enum DataKey {
+    Balance(Address),
+    Debt(Address),
+}
+
 #[contractimpl]
 impl HelloContract {
-    /// Deposit assets into the protocol
-    /// Health-check endpoint.
-    ///
-    /// Returns the string `"Hello"` to verify the contract is deployed and callable.
     /// Health-check endpoint. Returns "Hello".
     pub fn hello(env: Env) -> soroban_sdk::String {
         soroban_sdk::String::from_str(&env, "Hello")
@@ -423,7 +407,8 @@ impl HelloContract {
         collateral_asset: Option<Address>,
         amount: i128,
     ) -> Result<i128, crate::liquidate::LiquidationError> {
-        let (repaid, _seized, _fee) = liquidate(&env, caller, borrower, asset, None, amount)?;
+        let (repaid, _seized, _fee) =
+            liquidate(&env, liquidator, borrower, debt_asset, collateral_asset, amount)?;
         Ok(repaid)
     }
 
@@ -432,33 +417,7 @@ impl HelloContract {
         risk_management::get_risk_config(&env)
     }
 
-    pub fn set_pause_switch(
-        env: Env,
-        admin: Address,
-        operation: Symbol,
-        paused: bool,
-    ) -> Result<(), RiskManagementError> {
-        risk_management::set_pause_switch(&env, admin, operation, paused)
-    }
-
-    pub fn is_operation_paused(env: Env, operation: Symbol) -> bool {
-        risk_management::is_operation_paused(&env, operation)
-    }
-
-    pub fn is_emergency_paused(env: Env) -> bool {
-        risk_management::is_emergency_paused(&env)
-    }
-
-    pub fn set_emergency_pause(
-        env: Env,
-        admin: Address,
-        paused: bool,
-    ) -> Result<(), RiskManagementError> {
-        risk_management::set_emergency_pause(&env, admin, paused)
-    }
-
-    /// Get minimum collateral ratio.
-    /// Get a read-only configuration snapshot of the protocol
+    /// Get a read-only configuration snapshot of the protocol.
     ///
     /// # Returns
     /// Returns Some(ConfigSnapshot) if initialized, None otherwise.
@@ -467,10 +426,7 @@ impl HelloContract {
         get_config_snapshot(&env)
     }
 
-    /// Get minimum collateral ratio
-    ///
-    /// # Returns
-    /// Returns the minimum collateral ratio in basis points
+    /// Get minimum collateral ratio in basis points.
     pub fn get_min_collateral_ratio(env: Env) -> Result<i128, RiskManagementError> {
         risk_params::get_min_collateral_ratio(&env)
             .map_err(|_| RiskManagementError::InvalidParameter)
@@ -493,7 +449,7 @@ impl HelloContract {
             .map_err(|_| RiskManagementError::InvalidParameter)
     }
 
-    /// Get current utilization (in basis points).
+    /// Get current utilization (in basis points) from the interest-rate model.
     pub fn get_utilization(env: Env) -> i128 {
         interest_rate::calculate_utilization(&env).unwrap_or(0)
     }
@@ -508,8 +464,8 @@ impl HelloContract {
         interest_rate::calculate_supply_rate(&env).unwrap_or(0)
     }
 
-    /// Get protocol utilization in basis points.
-    pub fn get_utilization(env: Env) -> i128 {
+    /// Get protocol utilization from the analytics module (in basis points).
+    pub fn get_protocol_utilization(env: Env) -> i128 {
         analytics::get_protocol_utilization(&env).unwrap_or(0)
     }
 
@@ -531,13 +487,18 @@ impl HelloContract {
         flash_loan::set_flash_loan_fee(&env, caller, fee_bps)
     }
 
-    /// Set emergency interest-rate adjustment in basis points (admin only).
+    /// Set an emergency rate adjustment (admin only).
+    ///
+    /// The adjustment is added to the calculated borrow rate.
+    /// Bounded to ±10 000 bps (±100%).
     pub fn set_emergency_rate_adjustment(
         env: Env,
-        caller: Address,
+        admin: Address,
         adjustment_bps: i128,
-    ) -> Result<(), crate::interest_rate::InterestRateError> {
-        interest_rate::set_emergency_rate_adjustment(&env, caller, adjustment_bps)
+    ) -> Result<(), RiskManagementError> {
+        require_admin(&env, &admin)?;
+        interest_rate::set_emergency_rate_adjustment(&env, admin, adjustment_bps)
+            .map_err(|_| RiskManagementError::InvalidParameter)
     }
 
     /// Update interest rate model configuration (admin only).
@@ -568,41 +529,12 @@ impl HelloContract {
         .map_err(|_| RiskManagementError::InvalidParameter)
     }
 
-    /// Get current protocol utilization in basis points (0–10 000).
-    pub fn get_utilization(env: Env) -> i128 {
-        interest_rate::calculate_utilization(&env).unwrap_or(0)
-    }
-
-    /// Set an emergency rate adjustment (admin only).
-    ///
-    /// The adjustment is added to the calculated borrow rate.
-    /// Bounded to ±10 000 bps (±100%).
-    pub fn set_emergency_rate_adjustment(
-        env: Env,
-        admin: Address,
-        adjustment_bps: i128,
-    ) -> Result<(), RiskManagementError> {
-        require_admin(&env, &admin)?;
-        interest_rate::set_emergency_rate_adjustment(&env, admin, adjustment_bps)
-            .map_err(|_| RiskManagementError::InvalidParameter)
-    }
-
     /// Get the current interest rate configuration.
     pub fn get_interest_rate_config(env: Env) -> Option<InterestRateConfig> {
         interest_rate::get_interest_rate_config(&env)
     }
 
     /// Check if a position meets minimum collateral ratio.
-    pub fn require_min_collateral_ratio(
-        env: Env,
-        collateral_value: i128,
-        debt_value: i128,
-    ) -> Result<(), RiskManagementError> {
-        crate::risk_params::require_min_collateral_ratio(&env, collateral_value, debt_value)
-            .map_err(|_| RiskManagementError::InsufficientCollateralRatio)
-    }
-
-    /// Enforce minimum collateral ratio.
     pub fn require_min_collateral_ratio(
         env: Env,
         collateral_value: i128,
@@ -644,7 +576,6 @@ impl HelloContract {
         Ok(())
     }
 
-    /// Claim accumulated protocol reserves (admin only)
     /// Claim accumulated protocol reserves (admin only).
     pub fn claim_reserves(
         env: Env,
@@ -670,7 +601,7 @@ impl HelloContract {
             #[cfg(not(test))]
             {
                 let token_client = soroban_sdk::token::Client::new(&env, &_asset_addr);
-                token_client.transfer(&env.current_contract_address(), &to, &amount);
+                token_client.transfer(&env.current_contract_address(), &_to, &amount);
             }
         }
 
@@ -756,7 +687,6 @@ impl HelloContract {
         oracle::get_price(&env, &asset).expect("Oracle error")
     }
 
-    /// Configure oracle parameters (admin only)
     /// Configure oracle parameters (admin only).
     pub fn configure_oracle(env: Env, caller: Address, config: FullOracleConfig) {
         oracle::configure_oracle(&env, caller, config).expect("Oracle error")
@@ -879,12 +809,6 @@ impl HelloContract {
         bridge::register_bridge(&env, caller, network_id, bridge, fee_bps)
     }
 
-    /// Set bridge fee
-    ///
-    /// # Arguments
-    /// * `caller` - Admin address for authorization
-    /// * `network_id` - ID of the remote network
-    /// * `fee_bps` - New fee in basis points
     /// Set bridge fee (admin only).
     pub fn set_bridge_fee(
         env: Env,
@@ -1252,6 +1176,9 @@ impl HelloContract {
     }
 
     // ============================================================================
+    // Cross-Asset Convenience Aliases
+    // ============================================================================
+
     /// Deposit collateral for a specific asset (cross-asset lending).
     pub fn ca_deposit_collateral(
         env: Env,
@@ -1292,7 +1219,6 @@ impl HelloContract {
         cross_asset::cross_asset_repay(&env, user, asset, amount)
     }
 
-    // Governance Query Functions
     // ============================================================================
     // Governance Query Functions
     // ============================================================================
@@ -1353,8 +1279,8 @@ impl HelloContract {
     }
 }
 
-mod flash_loan_test;
 #[cfg(test)]
+mod flash_loan_test;
 #[cfg(test)]
 mod test_reentrancy;
 
@@ -1398,7 +1324,7 @@ mod tests {
 
     #[test]
     fn test_deposit_rejects_zero_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.deposit(&user, &0);
         }));
@@ -1407,7 +1333,7 @@ mod tests {
 
     #[test]
     fn test_deposit_rejects_negative_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.deposit(&user, &-100);
         }));
@@ -1416,7 +1342,7 @@ mod tests {
 
     #[test]
     fn test_withdraw_rejects_zero_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.withdraw(&user, &0);
         }));
@@ -1425,7 +1351,7 @@ mod tests {
 
     #[test]
     fn test_withdraw_rejects_negative_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.withdraw(&user, &-100);
         }));
@@ -1437,7 +1363,7 @@ mod tests {
 
     #[test]
     fn test_borrow_rejects_zero_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.borrow(&user, &0);
         }));
@@ -1446,7 +1372,7 @@ mod tests {
 
     #[test]
     fn test_borrow_rejects_negative_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.borrow(&user, &-100);
         }));
@@ -1455,7 +1381,7 @@ mod tests {
 
     #[test]
     fn test_repay_rejects_zero_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.repay(&user, &0);
         }));
@@ -1464,7 +1390,7 @@ mod tests {
 
     #[test]
     fn test_repay_rejects_negative_amount() {
-        let (env, client, _admin, user) = setup();
+        let (_env, client, _admin, user) = setup();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.repay(&user, &-100);
         }));
