@@ -68,6 +68,8 @@ mod amm_integration_test;
 #[cfg(test)]
 mod cross_asset_decimals_test;
 #[cfg(test)]
+mod cross_asset_ltv_test;
+#[cfg(test)]
 mod rate_clamp_test;
 #[cfg(test)]
 mod twap_view_test;
@@ -979,11 +981,16 @@ impl HelloContract {
     }
 
     /// Update asset configuration (admin only).
+    ///
+    /// `collateral_factor_bps` is bounded to `[0, 10_000]`. Out-of-range
+    /// values are rejected with [`CrossAssetError::InvalidCollateralFactor`].
+    /// See [`stellar_lend::collateral_factor_tiers`] for the formula and
+    /// worked example.
     #[allow(clippy::too_many_arguments)]
     pub fn update_asset_config(
         env: Env,
         asset: Option<Address>,
-        collateral_factor: Option<i128>,
+        collateral_factor_bps: Option<i128>,
         liquidation_threshold: Option<i128>,
         max_supply: Option<i128>,
         max_borrow: Option<i128>,
@@ -993,7 +1000,7 @@ impl HelloContract {
         update_asset_config(
             &env,
             asset,
-            collateral_factor,
+            collateral_factor_bps,
             liquidation_threshold,
             max_supply,
             max_borrow,
