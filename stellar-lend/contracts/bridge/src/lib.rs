@@ -888,6 +888,9 @@ mod domain_separation_test;
 mod inbound_cap_test;
 
 #[cfg(test)]
+mod window_rollover_test;
+
+#[cfg(test)]
 mod validator_bounds_test;
 
 #[cfg(test)]
