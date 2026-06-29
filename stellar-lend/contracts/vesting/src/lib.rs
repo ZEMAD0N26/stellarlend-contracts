@@ -740,3 +740,6 @@ mod lifecycle_e2e_test;
 
 #[cfg(test)]
 mod milestone_schedule_test;
+
+#[cfg(test)]
+mod claimable_consistency_test;
