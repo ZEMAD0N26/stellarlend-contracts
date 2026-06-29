@@ -106,6 +106,9 @@ on the total inbound value admitted within a rolling ledger-time window. This
 is defense-in-depth — it limits the *blast radius* of a failure elsewhere,
 it does not replace quorum/epoch validation.
 
+For operator-facing parameter guidance and code-verified examples, see
+[INBOUND_WINDOW_TUNING.md](./INBOUND_WINDOW_TUNING.md).
+
 ### Design notes
 
 - **Fail-closed by default.** A freshly constructed `Bridge` has
