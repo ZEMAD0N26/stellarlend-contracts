@@ -3030,3 +3030,4 @@ pub(crate) mod test {
         assert!(env.ledger().sequence() >= 0);
     }
 }
+#[cfg(test)] mod compound_interest_proptest;
