@@ -15,6 +15,7 @@ Key features
 | [ROTATION_PROTOCOL.md](./ROTATION_PROTOCOL.md) | Sequenced validator-set rotation flow, signed payload, quorum math, and inbound epoch handling |
 | [SECURITY_NOTES.md](./SECURITY_NOTES.md) | Bridge validator rotation threat model and inbound-cap security rationale |
 | [INBOUND_WINDOW_TUNING.md](./INBOUND_WINDOW_TUNING.md) | Rolling-window cap algorithm and operator parameter-selection guide |
+| [QUORUM_PROOF_BOUNDS.md](./QUORUM_PROOF_BOUNDS.md) | Quorum-proof vector size and duplicate-signer DoS bounds |
 | [WINDOW_GUARD.md](./WINDOW_GUARD.md) | Window-boundary guard rationale for zero windows, clock rollback, and overflow |
 | [EPOCH_INVARIANTS.md](./EPOCH_INVARIANTS.md) | Epoch monotonicity and retired-validator replay invariants |
 | [VALIDATORSET_INVARIANTS.md](./VALIDATORSET_INVARIANTS.md) | Validator-set deduplication and quorum threshold invariants |
