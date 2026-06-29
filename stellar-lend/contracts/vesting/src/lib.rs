@@ -17,6 +17,38 @@ pub struct GrantTransferred {
     pub timestamp: u64,
 }
 
+/// Event emitted by [`VestingContract::accelerate_grant`] when at least one active
+/// grant transitions from partially-vested to fully-vested.
+///
+/// # Fields
+///
+/// - `grantee`: The beneficiary address whose grants were accelerated. Corresponds
+///   to the `grantee` argument passed to `accelerate_grant`.
+///
+/// - `amount`: The total newly-released delta produced by this acceleration, in the
+///   smallest indivisible token unit (`u128`). This is the sum of
+///   `(grant.total - grant.released)` across all non-revoked grants that were not
+///   already fully vested, computed *before* the `released` fields are updated.
+///
+/// - `timestamp`: The `now` value passed to `accelerate_grant`, representing the
+///   current Unix timestamp at which acceleration was requested.
+///
+/// # When emitted
+///
+/// The event is emitted **exactly once per non-no-op call** — i.e., when at least
+/// one active grant had `released < total` at the time of the call.  
+/// The event is **suppressed** when every active grant already has `released == total`
+/// (the idempotent / no-op path).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantAccelerated {
+    /// The beneficiary address whose grants were accelerated.
+    pub grantee: String,
+    /// Sum of `total - released` across all newly-accelerated grants (smallest u128 unit).
+    pub amount: u128,
+    /// The `now` value passed to `accelerate_grant` (Unix timestamp).
+    pub timestamp: u64,
+}
+
 fn extend_grant_ttl(env: &Env, grantee: &Address) {
     let key = DataKey::Grant(grantee.clone());
     let extend_to = env.storage().max_ttl().min(PERSISTENT_TTL_LEDGERS);
@@ -39,6 +71,18 @@ pub enum VestingError {
     NoSuchGrant,
     /// All grants for the grantee are already revoked.
     AlreadyRevoked,
+    /// `total` (principal) must be greater than zero.
+    ZeroPrincipal,
+    /// `duration_seconds` must be greater than zero.
+    ZeroDuration,
+    /// `cliff_seconds` must not exceed `duration_seconds`.
+    CliffExceedsDuration,
+    /// The destination grantee already has an active grant.
+    DestinationAlreadyHasGrant,
+    /// Invalid parameters provided to the function.
+    InvalidParameters,
+    /// Checked arithmetic overflowed during acceleration.
+    Overflow,
     /// The requested claim amount is zero.
     InvalidAmount,
     /// The requested claim amount exceeds the claimable balance.
@@ -54,6 +98,16 @@ impl core::fmt::Display for VestingError {
             }
             VestingError::NoSuchGrant => write!(f, "no such grant"),
             VestingError::AlreadyRevoked => write!(f, "already revoked"),
+            VestingError::ZeroPrincipal => write!(f, "grant total must be greater than zero"),
+            VestingError::ZeroDuration => write!(f, "duration_seconds must be greater than zero"),
+            VestingError::CliffExceedsDuration => {
+                write!(f, "cliff_seconds must not exceed duration_seconds")
+            }
+            VestingError::DestinationAlreadyHasGrant => {
+                write!(f, "destination grantee already has an active grant")
+            }
+            VestingError::InvalidParameters => write!(f, "invalid parameters"),
+            VestingError::Overflow => write!(f, "arithmetic overflow"),
             VestingError::InvalidAmount => write!(f, "amount must be greater than zero"),
             VestingError::OverClaim => write!(f, "requested amount exceeds claimable balance"),
         }
@@ -130,6 +184,9 @@ pub struct VestingContract {
     /// When `true`, `claim` and `revoke` are blocked until the admin calls `resume`.
     /// Vesting math (accrual) continues unaffected; only settlement is halted.
     paused: bool,
+    /// Accumulates [`GrantAccelerated`] events emitted by [`VestingContract::accelerate_grant`].
+    /// Each entry corresponds to one non-no-op `accelerate_grant` call.
+    pub events: Vec<GrantAccelerated>,
 }
 
 impl VestingContract {
@@ -144,6 +201,7 @@ impl VestingContract {
             balances: HashMap::new(),
             total_locked: 0,
             paused: false,
+            events: vec![],
         }
     }
 
@@ -217,6 +275,20 @@ impl VestingContract {
         start_seconds: u64,
         duration_seconds: u64,
         cliff_seconds: u64,
+    ) -> Result<(), VestingError> {
+        if caller != self.admin {
+            return Err(VestingError::Unauthorized);
+        }
+        if total == 0 {
+            return Err(VestingError::ZeroPrincipal);
+        }
+        if duration_seconds == 0 {
+            return Err(VestingError::ZeroDuration);
+        }
+        if cliff_seconds > duration_seconds {
+            return Err(VestingError::CliffExceedsDuration);
+        }
+
     ) {
         let grant = Grant {
             grantee: grantee.to_string(),
@@ -457,6 +529,106 @@ impl VestingContract {
         self.total_locked
     }
 
+    /// Immediately marks every active (non-revoked) grant for `grantee` as fully
+    /// vested, so that `claimable()` equals `total - claimed` for each grant.
+    ///
+    /// # Arguments
+    /// - `caller` — must equal the configured admin address.
+    /// - `grantee` — the beneficiary whose schedules are accelerated.
+    /// - `now` — current Unix timestamp; recorded in the emitted event.
+    ///
+    /// # Behavior
+    /// 1. Returns `Err(Unauthorized)` if `caller != admin` (checked before pause).
+    /// 2. Returns `Err(ContractPaused)` if the contract is paused.
+    /// 3. Returns `Err(NoSuchGrant)` if `grantee` has no recorded grants.
+    /// 4. For each non-revoked grant where `released < total`, sets `released = total`
+    ///    and rewrites the schedule fields so `vested_at(t) == total` for all `t >= 1`.
+    /// 5. If no grant needed updating (no-op), returns `Ok(())` without emitting an event.
+    /// 6. Otherwise, decreases `total_locked` by the accumulated delta, emits a
+    ///    [`GrantAccelerated`] event, and returns `Ok(())`.
+    ///
+    /// # Errors
+    /// - [`VestingError::Unauthorized`] — `caller` is not the admin.
+    /// - [`VestingError::ContractPaused`] — the contract is paused.
+    /// - [`VestingError::NoSuchGrant`] — `grantee` has no recorded grants.
+    /// - [`VestingError::Overflow`] — checked arithmetic failed (unreachable under normal invariants).
+    ///
+    /// # Invariants
+    /// - `claimed` is never modified by this function.
+    /// - Revoked grants are never modified.
+    /// - After a successful (non-no-op) call, every active grant has `released == total`
+    ///   and `vested_at(t) == total` for all `t >= 1`.
+    /// - `total_locked` decreases by exactly `∑(total - released)` over affected grants.
+    /// - Calling this method a second time on the same grantee returns `Ok(())` with
+    ///   no state change (idempotent).
+    pub fn accelerate_grant(
+        &mut self,
+        caller: &str,
+        grantee: &str,
+        now: u64,
+    ) -> Result<(), VestingError> {
+        // Step 1 — auth check (before pause, so unauthorised callers never learn pause state).
+        if caller != self.admin {
+            return Err(VestingError::Unauthorized);
+        }
+
+        // Step 2 — pause check.
+        self.check_not_paused()?;
+
+        // Step 3 — grants lookup.
+        if !self.grants.contains_key(grantee) {
+            return Err(VestingError::NoSuchGrant);
+        }
+
+        // Step 4 — iterate non-revoked grants and accumulate the unvested delta.
+        let mut total_delta: u128 = 0;
+        {
+            let grants = self.grants.get_mut(grantee).unwrap();
+            for grant in grants.iter_mut() {
+                if grant.revoked {
+                    continue;
+                }
+                let delta = grant
+                    .total
+                    .checked_sub(grant.released)
+                    .ok_or(VestingError::Overflow)?;
+                // Mark the full principal as released.
+                grant.released = grant.total;
+                // Rewrite schedule so vested_at(t) == total for all t >= 1.
+                grant.start_seconds = 0;
+                grant.cliff_seconds = 0;
+                grant.duration_seconds = 1;
+                total_delta = total_delta
+                    .checked_add(delta)
+                    .ok_or(VestingError::Overflow)?;
+            }
+        }
+
+        // Step 5 — no-op path: nothing changed, return quietly.
+        if total_delta == 0 {
+            return Ok(());
+        }
+
+        // Step 6 — decrease total_locked by the accelerated amount.
+        self.total_locked = self
+            .total_locked
+            .checked_sub(total_delta)
+            .ok_or(VestingError::Overflow)?;
+
+        // Step 7 — emit the GrantAccelerated event.
+        self.events.push(GrantAccelerated {
+            grantee: grantee.to_string(),
+            amount: total_delta,
+            timestamp: now,
+        });
+
+        // Step 8 — TTL extension (no Env available in the in-memory test harness).
+        // extend_grant_ttl would be called here on-chain
+
+        Ok(())
+    }
+
+    /// Transfers a grant from one grantee to another, preserving the vesting schedule.
     /// Returns the total claimable amount across all grants for `grantee` at `now`.
     ///
     /// This is a view function that computes what would be claimable without mutating
@@ -535,6 +707,9 @@ mod tests {
 }
 
 #[cfg(test)]
+mod accelerate_test;
+
+#[cfg(test)]
 mod pause_test;
 
 #[cfg(test)]
@@ -554,3 +729,9 @@ mod vesting_views_test;
 
  #[cfg(test)]
  mod multi_grant_test;
+
+#[cfg(test)]
+mod lifecycle_e2e_test;
+
+#[cfg(test)]
+mod milestone_schedule_test;

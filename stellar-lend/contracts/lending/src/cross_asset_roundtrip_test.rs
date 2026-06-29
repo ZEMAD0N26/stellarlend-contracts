@@ -34,6 +34,7 @@ fn setup() -> (
         &7500,                  // 75% LTV
         &8000,                  // 80% liquidation threshold
         &1_000_000_000_000i128, // debt ceiling
+        &0i128,                 // borrow_cap (0 = uncapped)
     );
     client.set_asset_params(
         &admin,
@@ -41,6 +42,7 @@ fn setup() -> (
         &6000,                  // 60% LTV
         &7000,                  // 70% liquidation threshold
         &1_000_000_000_000i128, // debt ceiling
+        &0i128,                 // borrow_cap (0 = uncapped)
     );
 
     // Set oracle prices: 10_000_000 = $1.00 (7-decimal precision)

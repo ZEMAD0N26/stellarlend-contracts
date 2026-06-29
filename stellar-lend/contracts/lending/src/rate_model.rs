@@ -65,6 +65,7 @@ pub fn compute_borrow_rate(utilization_bps: i128, params: &RateParams) -> i128 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RateModelKey {
     LastRate,
+    LastTargetRate,
     LastRateLedger,
 }
 
@@ -158,6 +159,9 @@ pub fn update_and_get_rate(env: &Env, target_rate: i128, params: &RateParams) ->
     env.storage()
         .instance()
         .set(&RateModelKey::LastRate, &clamped_rate);
+    env.storage()
+        .instance()
+        .set(&RateModelKey::LastTargetRate, &target_rate);
     env.storage()
         .instance()
         .set(&RateModelKey::LastRateLedger, &current_ledger);

@@ -105,6 +105,59 @@ wins, which lets the current admin correct a bad nomination before acceptance.
 
 ---
 
+## Handover safety guards (hello-world contract)
+
+The `hello-world` contract's `transfer_admin` entrypoint validates the
+incoming admin address before accepting the transfer, preventing accidental
+protocol lockout.
+
+### Validation rules
+
+| Condition | Error | Rationale |
+|---|---|---|
+| `new_admin == env.current_contract_address()` | `CannotTransferToSelf` | The contract address can never authorise a transaction; transferring admin here permanently bricks every admin-gated function. |
+| `new_admin == current_admin` | `AlreadyAdmin` | No-op churn is wasteful and produces misleading events. |
+| `caller != current_admin` | `Unauthorized` | Only the current admin may initiate a handover. |
+| No admin stored | `NotInitialized` | Contract must be initialised before admin can be transferred. |
+
+### Event
+
+On a successful transfer the contract emits:
+
+```rust
+AdminTransferredEvent {
+    old_admin: Address,
+    new_admin: Address,
+}
+```
+
+Topics: `("AdminTransferredEvent",)` — single topic derived from the struct
+name.
+
+### Protection against fat-finger lockout
+
+The `CannotTransferToSelf` guard specifically prevents the scenario where an
+admin accidentally transfers authority to the contract's own address.  Because
+a Soroban contract cannot sign transactions, this would permanently disable
+every admin-gated operation (pause, oracle configuration, risk-parameter
+updates, etc.) with no recovery path.
+
+### Sequential transfers
+
+Multiple transfers are allowed.  After a successful handover the new admin
+may immediately transfer to another address — there is no cooldown period.
+
+### Error codes
+
+| Error | Code |
+|---|---|
+| `CannotTransferToSelf` | 1 |
+| `AlreadyAdmin` | 2 |
+| `Unauthorized` | 3 |
+| `NotInitialized` | 4 |
+
+---
+
 ## Guardian role
 
 The guardian is an optional address that is permitted to call

@@ -3,7 +3,7 @@ use soroban_sdk::{Address, Env, Map, Vec};
 use crate::debt::{DebtPosition, DEFAULT_APR_BPS};
 use crate::{
     check_emergency_status, check_pause_status, AssetParams, DataKey, LendingError, PriceRecord,
-    ProtocolAction,
+    ProtocolAction, DEFAULT_ORACLE_MAX_AGE_SECS,
 };
 
 const PRICE_DIVISOR: i128 = 10_000_000;
@@ -86,10 +86,16 @@ pub fn load_asset_params(env: &Env, asset: &Address) -> Option<AssetParams> {
 /// Returns [`LendingError::PriceFeedNotFound`] if no price has been stored for
 /// this asset.
 pub fn get_price_for_asset(env: &Env, asset: &Address) -> Result<PriceRecord, LendingError> {
-    env.storage()
+    let record: PriceRecord = env
+        .storage()
         .persistent()
         .get(&DataKey::OraclePrice(asset.clone()))
-        .ok_or(LendingError::PriceFeedNotFound)
+        .ok_or(LendingError::PriceFeedNotFound)?;
+    let now = env.ledger().timestamp();
+    if now > record.timestamp.saturating_add(DEFAULT_ORACLE_MAX_AGE_SECS) {
+        return Err(LendingError::StaleOracleTimestamp);
+    }
+    Ok(record)
 }
 
 fn add_to_user_collateral_list(env: &Env, user: &Address, asset: &Address) {
@@ -600,6 +606,22 @@ pub fn borrow_asset_internal(
             remove_from_user_debt_list(env, user, asset);
         }
         return Err(LendingError::DebtCeilingExceeded);
+    }
+    // Enforce optional per-asset borrow cap: 0 means uncapped.
+    if params.borrow_cap != 0 && new_total_debt > params.borrow_cap {
+        save_debt_asset(
+            env,
+            user,
+            asset,
+            &DebtPosition {
+                principal: prev_principal,
+                last_update: now,
+            },
+        );
+        if prev_principal == 0 {
+            remove_from_user_debt_list(env, user, asset);
+        }
+        return Err(LendingError::BorrowCapExceeded);
     }
     env.storage()
         .persistent()
