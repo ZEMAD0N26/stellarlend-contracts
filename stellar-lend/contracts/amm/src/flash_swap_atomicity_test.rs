@@ -65,7 +65,7 @@ impl SwapCallbackStub {
     /// Initiate flash swap + repay in one atomic host invocation.
     pub fn execute(env: Env, amm: soroban_sdk::Address, amount_out: i128, amount_in: i128) {
         let client = AmmContractClient::new(&env, &amm);
-        client.flash_swap_a_for_b(&amount_out, &FEE_BPS_VAL, &Bytes::new(&env));
+        client.flash_swap_a_for_b(&amount_out, &Bytes::new(&env));
         client.repay_flash_swap(&amount_in);
     }
 }
@@ -84,9 +84,9 @@ impl ReentrantCallbackStub {
     pub fn execute(env: Env, amm: soroban_sdk::Address, amount_out: i128) {
         let client = AmmContractClient::new(&env, &amm);
         // Step 1: open the flash swap — arms the guard.
-        client.flash_swap_a_for_b(&amount_out, &FEE_BPS_VAL, &Bytes::new(&env));
+        client.flash_swap_a_for_b(&amount_out, &Bytes::new(&env));
         // Step 2: attempt a nested flash swap — must be rejected by the guard.
-        client.flash_swap_a_for_b(&1_i128, &FEE_BPS_VAL, &Bytes::new(&env));
+        client.flash_swap_a_for_b(&1_i128, &Bytes::new(&env));
     }
 }
 
