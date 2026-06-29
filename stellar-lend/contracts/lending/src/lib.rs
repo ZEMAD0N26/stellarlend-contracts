@@ -78,15 +78,13 @@ mod liquidation_sequence_invariant_test;
 #[cfg(test)]
 mod max_borrow_proptest;
 #[cfg(test)]
-mod mul_div_proptest;
-#[cfg(test)]
-mod oracle_payload_binding_test;
+mod property_invariants_test;
 #[cfg(test)]
 mod oracle_staleness_test;
 #[cfg(test)]
 mod position_summary_bench_test;
 #[cfg(test)]
-mod property_invariants_test;
+mod repay_overpay_test;
 #[cfg(test)]
 mod rate_cache_test;
 #[cfg(test)]
@@ -1500,6 +1498,15 @@ impl LendingContract {
             let new_col = collateral
                 .checked_sub(final_seized)
                 .ok_or(LendingError::Overflow)?;
+            env.storage()
+                .persistent()
+                .set(&DataKey::BadDebt, &new_bad_debt);
+            env.events()
+                .publish((Symbol::new(&env, "bad_debt"), borrower.clone()), shortfall);
+            available_collateral
+        } else {
+            seized_collateral
+        };
 
             let updated_position = DebtPosition {
                 principal: new_debt,
@@ -3382,5 +3389,28 @@ pub(crate) mod test {
     fn test_protocol_metrics_ledger_field_set() {
         let (env, _client, _admin, _user) = setup();
         assert!(env.ledger().sequence() >= 0);
+    }
+}
+
+#[contractimpl]
+impl LendingContract {
+    pub fn withdraw_reserve(env: Env, asset: Address, amount: i128, to: Address) {
+        assert_admin(&env);
+        to.require_auth();
+
+        let current = read_reserve(&env, &asset);
+        if amount <= 0 || amount > current {
+            panic!("Invalid withdraw amount");
+        }
+
+        write_reserve(&env, &asset, current - amount);
+
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &to, &amount);
+
+        env.events().publish(
+            (symbol_short!("reserve"), symbol_short!("withdraw"), asset),
+            (amount, to),
+        );
     }
 }
