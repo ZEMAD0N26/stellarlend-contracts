@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
 
 use crate::math::split_interest_by_reserve_factor;
 use crate::rounding_strategy::{calculate_interest_with_rounding, RoundingError, RoundingMode};
@@ -450,6 +450,65 @@ pub fn effective_supply_rate(
         .ok_or(DebtError::Overflow)?;
 
     Ok(supply_rate.max(0))
+}
+
+// ─── Accrual-split event log ──────────────────────────────────────────────────
+
+/// One entry in the persistent accrual-split history.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccrualSplitEntry {
+    pub borrower: Address,
+    pub timestamp: u64,
+    pub total_interest: i128,
+    pub depositor_yield: i128,
+    pub reserve_cut: i128,
+}
+
+const KEY_ACCRUAL_LOG: &str = "accrual_log";
+
+/// Append a settle_accrual_split result to the persistent log and emit a
+/// `settle_accrual_split` contract event for off-chain indexers.
+///
+/// Call this immediately after `settle_accrual_split` so the split is
+/// recorded for both on-chain history (via `get_accrual_split_log`) and
+/// off-chain TWAP/revenue attribution consumers.
+pub fn record_accrual_split(
+    env: &Env,
+    borrower: &Address,
+    timestamp: u64,
+    split: &InterestSplit,
+) {
+    let entry = AccrualSplitEntry {
+        borrower: borrower.clone(),
+        timestamp,
+        total_interest: split.total_interest,
+        depositor_yield: split.depositor_yield,
+        reserve_cut: split.reserve_cut,
+    };
+
+    let mut log: Vec<AccrualSplitEntry> = env
+        .storage()
+        .persistent()
+        .get(&Symbol::new(env, KEY_ACCRUAL_LOG))
+        .unwrap_or_else(|| Vec::new(env));
+    log.push_back(entry.clone());
+    env.storage()
+        .persistent()
+        .set(&Symbol::new(env, KEY_ACCRUAL_LOG), &log);
+
+    env.events().publish(
+        (symbol_short!("accrual"), borrower.clone()),
+        (split.total_interest, split.depositor_yield, split.reserve_cut),
+    );
+}
+
+/// Return the full history of recorded accrual splits.
+pub fn get_accrual_split_log(env: &Env) -> Vec<AccrualSplitEntry> {
+    env.storage()
+        .persistent()
+        .get(&Symbol::new(env, KEY_ACCRUAL_LOG))
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 // ─── Borrow / repay mutations ─────────────────────────────────────────────────
