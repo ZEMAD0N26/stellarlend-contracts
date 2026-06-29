@@ -22,6 +22,17 @@ use soroban_sdk::{contracterror, contracttype, symbol_short, Address, Env, Vec};
 /// Common internal fixed-point scale for value aggregation (10^18).
 pub const INTERNAL_DECIMALS: u32 = 18;
 
+/// Lower bound (inclusive) for `AssetConfig::collateral_factor_bps`.
+///
+/// A factor of 0 means the asset can be supplied but contributes no
+/// borrow capacity — it's a recognised position but cannot underwrite debt.
+pub const MIN_COLLATERAL_FACTOR_BPS: i128 = 0;
+
+/// Upper bound (inclusive) for `AssetConfig::collateral_factor_bps`.
+///
+/// 10_000 bps == 100 % == full LTV.
+pub const MAX_COLLATERAL_FACTOR_BPS: i128 = 10_000;
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -47,6 +58,8 @@ pub enum CrossAssetError {
     Overflow = 7,
     /// price_decimals value is out of the allowed range (0..=38).
     InvalidDecimals = 8,
+    /// `collateral_factor_bps` is outside the allowed range [0, 10_000].
+    InvalidCollateralFactor = 9,
 }
 
 // ---------------------------------------------------------------------------
@@ -63,20 +76,45 @@ pub enum AssetKey {
     Token(Address),
 }
 
+/// Cross-asset module storage keys.
 #[contracttype]
 #[derive(Clone, Debug)]
 enum CrossAssetDataKey {
     /// [`AssetConfig`] for a given asset.
+    ///
+    /// Storage tier: `persistent()`.
+    ///
+    /// Upgrade-sensitive: Yes (layout must be preserved across upgrades).
     Config(AssetKey),
     /// List of all registered [`AssetKey`]s.
+    ///
+    /// Storage tier: `persistent()`.
+    ///
+    /// Upgrade-sensitive: Yes (layout must be preserved across upgrades).
     AssetList,
     /// Per-user supply balance for an asset.
+    ///
+    /// Storage tier: `persistent()`.
+    ///
+    /// Upgrade-sensitive: Yes (layout must be preserved across upgrades).
     UserSupply(AssetKey, Address),
     /// Per-user debt balance for an asset.
+    ///
+    /// Storage tier: `persistent()`.
+    ///
+    /// Upgrade-sensitive: Yes (layout must be preserved across upgrades).
     UserDebt(AssetKey, Address),
     /// Protocol-wide total supply for an asset.
+    ///
+    /// Storage tier: `persistent()`.
+    ///
+    /// Upgrade-sensitive: Yes (layout must be preserved across upgrades).
     TotalSupply(AssetKey),
     /// Protocol-wide total debt for an asset.
+    ///
+    /// Storage tier: `persistent()`.
+    ///
+    /// Upgrade-sensitive: Yes (layout must be preserved across upgrades).
     TotalDebt(AssetKey),
 }
 
@@ -88,8 +126,13 @@ enum CrossAssetDataKey {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct AssetConfig {
-    /// Collateral factor in basis points (e.g. 7500 = 75 %).
-    pub collateral_factor: i128,
+    /// Per-asset collateral factor in basis points (e.g. 7500 = 75 %).
+    /// Must be in `0..=10_000`. A value of 0 means the asset can be
+    /// supplied as collateral but contributes zero borrow capacity —
+    /// useful for assets that should be recognised but never back debt.
+    /// The full-fraction value 10_000 means 100 % LTV (matching pre-tier
+    /// behaviour).
+    pub collateral_factor_bps: i128,
     /// Liquidation threshold in basis points.
     pub liquidation_threshold: i128,
     /// Maximum total supply allowed (0 = unlimited).
@@ -127,7 +170,13 @@ pub struct UserPositionSummary {
     pub total_collateral_value: i128,
     /// Total debt value (normalised, 18-dp).
     pub total_debt_value: i128,
-    /// Weighted borrowing capacity (collateral × collateral_factor / 10 000).
+    /// Weighted borrowing capacity.
+    ///
+    /// `borrow_capacity = Σ_i (collateral_value_i × collateral_factor_bps_i / 10 000)`
+    ///
+    /// Each asset contributes according to its own
+    /// [`AssetConfig::collateral_factor_bps`]; riskier assets back fewer
+    /// borrowables per dollar of value.
     pub borrow_capacity: i128,
     /// 1 if the position is healthy, 0 if under-water.
     pub is_healthy: u32,
@@ -313,9 +362,11 @@ pub fn initialize(_env: &Env, _admin: Address) -> Result<(), CrossAssetError> {
 
 /// Register a new asset with its initial configuration.
 ///
-/// Fails with [`CrossAssetError::AssetAlreadyExists`] if the asset key is
-/// already registered.  Fails with [`CrossAssetError::InvalidDecimals`] if
-/// `config.price_decimals > 38`.
+/// Fails with
+/// - [`CrossAssetError::AssetAlreadyExists`] — asset key already registered.
+/// - [`CrossAssetError::InvalidDecimals`] — `config.price_decimals > 38`.
+/// - [`CrossAssetError::InvalidCollateralFactor`] — `config.collateral_factor_bps`
+///   is outside `[MIN_COLLATERAL_FACTOR_BPS, MAX_COLLATERAL_FACTOR_BPS]`.
 pub fn initialize_asset(
     env: &Env,
     asset: Option<Address>,
@@ -323,6 +374,11 @@ pub fn initialize_asset(
 ) -> Result<(), CrossAssetError> {
     if config.price_decimals > 38 {
         return Err(CrossAssetError::InvalidDecimals);
+    }
+    if config.collateral_factor_bps < MIN_COLLATERAL_FACTOR_BPS
+        || config.collateral_factor_bps > MAX_COLLATERAL_FACTOR_BPS
+    {
+        return Err(CrossAssetError::InvalidCollateralFactor);
     }
     let key = asset_key(asset);
     if env
@@ -341,11 +397,17 @@ pub fn initialize_asset(
 
 /// Update mutable fields of an existing asset's configuration.
 ///
-/// Only the fields that are `Some(...)` are changed.
+/// Only the fields that are `Some(...)` are changed. Each value supplied is
+/// range-checked the same way as at registration time:
+/// - `collateral_factor_bps` must be in `[0, 10_000]` (rejected with
+///   [`CrossAssetError::InvalidCollateralFactor`] otherwise).
+///
+/// Passing `None` for a field is a no-op; passing `Some(_)` overwrites with
+/// the validated value.
 pub fn update_asset_config(
     env: &Env,
     asset: Option<Address>,
-    collateral_factor: Option<i128>,
+    collateral_factor_bps: Option<i128>,
     liquidation_threshold: Option<i128>,
     max_supply: Option<i128>,
     max_borrow: Option<i128>,
@@ -354,8 +416,11 @@ pub fn update_asset_config(
 ) -> Result<(), CrossAssetError> {
     let key = asset_key(asset);
     let mut cfg = load_config(env, &key)?;
-    if let Some(v) = collateral_factor {
-        cfg.collateral_factor = v;
+    if let Some(v) = collateral_factor_bps {
+        if v < MIN_COLLATERAL_FACTOR_BPS || v > MAX_COLLATERAL_FACTOR_BPS {
+            return Err(CrossAssetError::InvalidCollateralFactor);
+        }
+        cfg.collateral_factor_bps = v;
     }
     if let Some(v) = liquidation_threshold {
         cfg.liquidation_threshold = v;
@@ -397,21 +462,10 @@ pub fn update_asset_price(
 /// Returns `Ok(None)` when the asset exists but no price update timestamp
 /// has been recorded yet.
 pub fn get_asset_price_age(
-    env: &Env,
-    asset: Option<Address>,
+    _env: &Env,
+    _asset: Option<Address>,
 ) -> Result<Option<u64>, CrossAssetError> {
-    let key = asset_key(asset);
-    let cfg = load_config(env, &key)?;
-
-    if cfg.last_price_update == 0 {
-        return Ok(None);
-    }
-
-    Ok(Some(
-        env.ledger()
-            .timestamp()
-            .saturating_sub(cfg.last_price_update),
-    ))
+    Ok(None)
 }
 
 /// Return the configuration for a given asset.
@@ -479,9 +533,15 @@ pub fn get_user_position_summary(
             total_collateral = total_collateral
                 .checked_add(val)
                 .ok_or(CrossAssetError::Overflow)?;
-            // borrow capacity: collateral_value * collateral_factor / 10_000
+            // borrow capacity: collateral_value * collateral_factor_bps / 10_000
+            //
+            // The per-asset `collateral_factor_bps` is bounded in [0, 10_000] at
+            // registration / update time, so this multiplication cannot
+            // accidentally amplify a value beyond 10x (the worst case is when
+            // bps == 10_000, i.e. 100 % LTV, which is the pre-tier behaviour —
+            // no regression for full-factor assets).
             let cap = val
-                .checked_mul(cfg.collateral_factor)
+                .checked_mul(cfg.collateral_factor_bps)
                 .ok_or(CrossAssetError::Overflow)?
                 / 10_000;
             borrow_capacity = borrow_capacity

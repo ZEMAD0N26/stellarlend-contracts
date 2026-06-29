@@ -8,6 +8,16 @@ Key features
 - `validate_inbound_epoch(signed_epoch)` rejects messages signed by retired epochs (signed_epoch < current epoch)
 - `set_inbound_cap(max_per_window, window_size, current_time)` / `admit_inbound(amount, current_time)` enforce a configurable, rolling-ledger-time cap on cumulative inbound value — defense-in-depth against an authorized-but-compromised validator set draining the bridge in a single window. **Fail-closed by default**: a fresh `Bridge` admits no inbound value until a cap is explicitly configured. See `SECURITY_NOTES.md` for the full threat model and design rationale.
 
+## Documentation Index
+
+| Document | Description |
+|---|---|
+| [SECURITY_NOTES.md](./SECURITY_NOTES.md) | Bridge validator rotation threat model and inbound-cap security rationale |
+| [INBOUND_WINDOW_TUNING.md](./INBOUND_WINDOW_TUNING.md) | Rolling-window cap algorithm and operator parameter-selection guide |
+| [WINDOW_GUARD.md](./WINDOW_GUARD.md) | Window-boundary guard rationale for zero windows, clock rollback, and overflow |
+| [EPOCH_INVARIANTS.md](./EPOCH_INVARIANTS.md) | Epoch monotonicity and retired-validator replay invariants |
+| [VALIDATORSET_INVARIANTS.md](./VALIDATORSET_INVARIANTS.md) | Validator-set deduplication and quorum threshold invariants |
+
 Design notes
 - Validator public keys are stored as raw bytes to keep on-disk/state serialization simple and unambiguous.
 - Quorum threshold is a supermajority > 2/3 of current validators.

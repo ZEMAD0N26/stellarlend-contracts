@@ -55,6 +55,7 @@
 | `get_position` | `(user: Address)` | `PositionSummary { collateral: i128, debt: i128, health_factor: i128 }` |
 | `get_debt_position` | `(user: Address)` | `DebtPosition { principal: i128, last_update: u64 }` |
 | `get_min_borrow` | `()` | `i128` |
+| `get_rate_smoothing_state` | `()` | `RateSmoothingState { schema_version: u32, current_rate_bps: i128, last_target_rate_bps: i128, last_update_ledger: u32 }` |
 | `get_health_factor` | `(user: Address)` | `i128` |
 | `get_protocol_metrics` | `()` | `ProtocolMetrics { total_borrow: i128, total_supply: i128, utilization_bps: i128, ledger: u32 }` |
 
@@ -156,6 +157,17 @@ pub struct ProtocolMetrics {
     pub total_supply: i128,
     pub utilization_bps: i128,
     pub ledger: u32,
+}
+```
+
+### `RateSmoothingState`
+
+```rust
+pub struct RateSmoothingState {
+    pub schema_version: u32,
+    pub current_rate_bps: i128,
+    pub last_target_rate_bps: i128,
+    pub last_update_ledger: u32,
 }
 ```
 

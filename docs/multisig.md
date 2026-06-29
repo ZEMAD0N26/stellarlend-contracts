@@ -4,6 +4,8 @@
 
 The **multisig** module (`src/multisig.rs`) implements a proposal–approve–execute governance pattern for critical StellarLend protocol parameters. It is a thin, focused layer on top of `governance.rs` that adds admin-set management (`ms_set_admins`) and a clean public API for the multisig flow.
 
+For a detailed reference on the two-phase change lifecycle, timelock cooldowns, and cancellation mechanics, see the [Change Lifecycle Guide](../stellar-lend/contracts/multisig/docs/CHANGE_LIFECYCLE.md).
+
 ---
 
 ## Flow
@@ -153,6 +155,8 @@ Removes expired, unexecuted proposal records and their approval vectors from con
 ---
 
 ## Signer-Set Change Timelock
+
+For detailed state diagrams and transition guides regarding signer-set rotations, see the [Change Lifecycle Guide](../stellar-lend/contracts/multisig/docs/CHANGE_LIFECYCLE.md).
 
 ### Motivation
 

@@ -192,6 +192,7 @@ fn test_asset_params_uses_persistent_storage() {
         &7_000i128,
         &8_000i128,
         &1_000_000_000i128,
+        &0i128,
     );
 
     env.as_contract(&contract_id, || {
