@@ -729,3 +729,6 @@ mod vesting_views_test;
 
  #[cfg(test)]
  mod multi_grant_test;
+
+#[cfg(test)]
+mod lifecycle_e2e_test;
