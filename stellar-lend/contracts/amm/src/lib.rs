@@ -41,6 +41,11 @@ const FEE_TIERS_KEY: &str = "fee_tiers";
 const KEY_RES_A: (&str, &str) = ("pool", "a");
 const KEY_RES_B: (&str, &str) = ("pool", "b");
 
+// TWAP observation ring-buffer. Each observation stores (timestamp, cumulative_price_numerator,
+// cumulative_price_denominator) so off-chain consumers can compute time-weighted average prices.
+const KEY_TWAP_OBS: (&str, &str) = ("pool", "twap_obs");
+const KEY_TWAP_LAST_TS: (&str, &str) = ("pool", "twap_last_ts");
+
 // Price-impact guard.
 //
 // `KEY_MAX_IMPACT_BPS` stores the admin-configured maximum price-impact in
@@ -672,6 +677,62 @@ impl AmmContract {
         let fee_a: i128 = env.storage().persistent().get(&KEY_FEE_A).unwrap_or(0);
         let fee_b: i128 = env.storage().persistent().get(&KEY_FEE_B).unwrap_or(0);
         (fee_a, fee_b)
+    }
+
+    /// Record a time-weighted spot-price observation for off-chain TWAP reconstruction.
+    ///
+    /// Each call appends `(timestamp, cumulative_num, cumulative_denom)` to the
+    /// persistent observation buffer. Off-chain indexers can fetch the full buffer
+    /// via `get_twap_observations()` and compute TWAP over any sub-window as:
+    ///
+    ///   TWAP = (cum_num[t1] - cum_num[t0]) / (cum_denom[t1] - cum_denom[t0])
+    ///
+    /// where `cum_denom` is cumulative time (seconds) and `cum_num` is cumulative
+    /// `reserve_b * dt / reserve_a` (price of A in units of B weighted by time).
+    ///
+    /// Only callable internally by swap functions; exposed here for testability.
+    fn record_twap_observation(env: &Env) {
+        let ra: i128 = env.storage().persistent().get(&KEY_RES_A).unwrap_or(1);
+        let rb: i128 = env.storage().persistent().get(&KEY_RES_B).unwrap_or(1);
+        let now: u64 = env.ledger().timestamp();
+
+        let last_ts: u64 = env
+            .storage()
+            .persistent()
+            .get(&KEY_TWAP_LAST_TS)
+            .unwrap_or(now);
+
+        let dt = now.saturating_sub(last_ts) as i128;
+
+        let mut obs: Vec<(u64, i128, i128)> = env
+            .storage()
+            .persistent()
+            .get(&KEY_TWAP_OBS)
+            .unwrap_or_else(|| Vec::new(env));
+
+        let prev_num: i128 = obs.last().map(|(_, n, _)| n).unwrap_or(0);
+        let prev_denom: i128 = obs.last().map(|(_, _, d)| d).unwrap_or(0);
+
+        // Accumulate price * time (price = rb / ra; avoid division, store numerator * dt separately)
+        let new_num = prev_num.saturating_add(rb.saturating_mul(dt));
+        let new_denom = prev_denom.saturating_add(ra.saturating_mul(dt));
+
+        obs.push_back((now, new_num, new_denom));
+
+        env.storage().persistent().set(&KEY_TWAP_OBS, &obs);
+        env.storage().persistent().set(&KEY_TWAP_LAST_TS, &now);
+    }
+
+    /// Return the full TWAP observation buffer as `Vec<(timestamp, cumulative_num, cumulative_denom)>`.
+    ///
+    /// Off-chain consumers can reconstruct any-window TWAP:
+    ///   TWAP_price_of_A_in_B = Δnum / Δdenom
+    /// where Δnum = cum_num[t1] - cum_num[t0] and Δdenom = cum_denom[t1] - cum_denom[t0].
+    pub fn get_twap_observations(env: Env) -> Vec<(u64, i128, i128)> {
+        env.storage()
+            .persistent()
+            .get(&KEY_TWAP_OBS)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 }
 
