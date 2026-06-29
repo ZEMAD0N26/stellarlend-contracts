@@ -471,6 +471,14 @@ impl LendingContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         set_emergency_state_internal(&env, EmergencyState::Normal);
+        // Seed global borrow index at 1.0 (INDEX_SCALE).
+        debt::save_borrow_index(&env, INDEX_SCALE);
+        debt::save_last_index_update(&env, env.ledger().timestamp());
+        // Initialise an empty borrower list for migration support.
+        let empty: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+        env.storage()
+            .instance()
+            .set(&DataKey::BorrowerList, &empty);
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -1076,8 +1084,6 @@ impl LendingContract {
         let _ = Self::get_collateral_price_internal(&env)?;
 
         let now = env.ledger().timestamp();
-        let position = load_debt(&env, &user);
-        let prev_principal = position.principal;
         let rate = current_borrow_rate(&env);
         let settled_position = settle_and_accrue_insurance(&env, &position, now, rate)?;
         let updated = borrow_amount(settled_position, now, amount, rate).map_err(|e| match e {
@@ -1466,8 +1472,6 @@ impl LendingContract {
         require_no_active_flash_loan(&env);
         user.require_auth();
         let now = env.ledger().timestamp();
-        let position = load_debt(&env, &user);
-        let prev_principal = position.principal;
         let rate = current_borrow_rate(&env);
         let settled_position = settle_and_accrue_insurance(&env, &position, now, rate)?;
         let updated = repay_amount(settled_position, now, amount, rate).map_err(|e| match e {
@@ -1475,13 +1479,16 @@ impl LendingContract {
             debt::DebtError::Overflow => LendingError::Overflow,
         })?;
         save_debt(&env, &user, &updated);
-        // Track protocol-level total debt
+
+        // Track protocol-level total debt.
         let total_debt: i128 = env
             .storage()
             .persistent()
             .get(&DataKey::TotalDebt)
             .unwrap_or(0);
-        let repaid = prev_principal.checked_sub(updated.principal).unwrap_or(0);
+        let repaid = prev_principal
+            .checked_sub(updated.principal)
+            .unwrap_or(0);
         let new_total_debt = total_debt.saturating_sub(repaid);
         env.storage()
             .persistent()
@@ -2396,6 +2403,29 @@ fn extend_debt_ttl(env: &Env, user: &Address) {
             .persistent()
             .extend_ttl(&key, threshold, extend_to);
     }
+}
+
+/// Append `user` to the `BorrowerList` stored in instance storage, if not
+/// already present.  This list is used by `migrate_positions` to iterate
+/// over all debt records.
+fn register_borrower(env: &Env, user: &Address) {
+    let mut list: soroban_sdk::Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::BorrowerList)
+        .unwrap_or_else(|| soroban_sdk::vec![env]);
+
+    // Linear scan is acceptable: the list is bounded by the number of unique
+    // borrowers and is read/written only on borrow (not every tx).
+    for i in 0..list.len() {
+        if list.get(i).unwrap() == *user {
+            return; // already registered
+        }
+    }
+    list.push_back(user.clone());
+    env.storage()
+        .instance()
+        .set(&DataKey::BorrowerList, &list);
 }
 
 fn pause_is_active(env: &Env, operation: PauseType) -> bool {

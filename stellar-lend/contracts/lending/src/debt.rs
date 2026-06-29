@@ -19,7 +19,13 @@ pub const DEFAULT_RESERVE_FACTOR_BPS: u32 = 0;
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DebtPosition {
+    /// Recorded principal at last touch (does not include un-accrued interest).
     pub principal: i128,
+    /// Snapshot of the global borrow index at the time this position was last
+    /// modified.  Zero signals "pre-migration; treat as current index".
+    pub borrow_index_snapshot: i128,
+    /// Wall-clock timestamp of the last explicit settlement, kept for
+    /// backward-compatible reads.  Updated on every position write.
     pub last_update: u64,
 }
 
@@ -52,6 +58,7 @@ pub(crate) struct BorrowRateComputation {
 pub enum DebtError {
     Overflow,
     InvalidAmount,
+    IndexInvariantViolated,
 }
 
 impl From<&'static str> for DebtError {
@@ -105,10 +112,12 @@ pub fn load_debt(env: &Env, user: &Address) -> DebtPosition {
         .get(&key)
         .unwrap_or(DebtPosition {
             principal: 0,
+            borrow_index_snapshot: INDEX_SCALE,
             last_update: env.ledger().timestamp(),
         })
 }
 
+/// Persist a debt position to storage.
 pub fn save_debt(env: &Env, user: &Address, position: &DebtPosition) {
     let key = DataKey::Debt(user.clone());
     env.storage().persistent().set(&key, position);
@@ -302,6 +311,7 @@ pub fn settle_accrual(
 
     Ok(DebtPosition {
         principal,
+        borrow_index_snapshot: position.borrow_index_snapshot,
         last_update: now,
     })
 }
@@ -453,7 +463,7 @@ pub fn borrow_amount(
     if amount <= 0 {
         return Err(DebtError::InvalidAmount);
     }
-
+    // Fall back to elapsed-time accrual for legacy positions with snapshot == 0.
     let mut settled = settle_accrual(&position, now, rate_bps)?;
     settled.principal = settled
         .principal
@@ -463,6 +473,9 @@ pub fn borrow_amount(
     Ok(settled)
 }
 
+/// Record a repayment against `position`, settling accrued interest first.
+///
+/// The position's snapshot is refreshed to `current_index` after settlement.
 pub fn repay_amount(
     position: DebtPosition,
     now: u64,
@@ -472,7 +485,6 @@ pub fn repay_amount(
     if amount <= 0 {
         return Err(DebtError::InvalidAmount);
     }
-
     let mut settled = settle_accrual(&position, now, rate_bps)?;
     settled.principal = if amount >= settled.principal {
         0
@@ -480,5 +492,46 @@ pub fn repay_amount(
         settled.principal - amount
     };
     settled.last_update = now;
+    Ok(settled)
+}
+
+/// Index-aware borrow: settle via index ratio, then add `amount`.
+///
+/// Preferred over `borrow_amount` once the global index is active.
+pub fn borrow_amount_indexed(
+    position: &DebtPosition,
+    current_index: i128,
+    now: u64,
+    amount: i128,
+) -> Result<DebtPosition, DebtError> {
+    if amount <= 0 {
+        return Err(DebtError::InvalidAmount);
+    }
+    let mut settled = settle_position(position, current_index, now)?;
+    settled.principal = settled
+        .principal
+        .checked_add(amount)
+        .ok_or(DebtError::Overflow)?;
+    Ok(settled)
+}
+
+/// Index-aware repay: settle via index ratio, then subtract `amount`.
+///
+/// Preferred over `repay_amount` once the global index is active.
+pub fn repay_amount_indexed(
+    position: &DebtPosition,
+    current_index: i128,
+    now: u64,
+    amount: i128,
+) -> Result<DebtPosition, DebtError> {
+    if amount <= 0 {
+        return Err(DebtError::InvalidAmount);
+    }
+    let mut settled = settle_position(position, current_index, now)?;
+    settled.principal = if amount >= settled.principal {
+        0
+    } else {
+        settled.principal - amount
+    };
     Ok(settled)
 }
