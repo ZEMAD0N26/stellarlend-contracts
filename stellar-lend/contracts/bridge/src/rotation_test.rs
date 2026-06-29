@@ -64,7 +64,7 @@ mod rotation_tests {
         epoch: u64,
         signers: &[&Keypair],
     ) -> Vec<(ed25519_dalek::PublicKey, Signature)> {
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch))
+        let payload = Bridge::quorum_proof_payload(&[], new_set, epoch)
             .expect("serialization must not fail");
         signers
             .iter()
@@ -86,7 +86,6 @@ mod rotation_tests {
         let initial = validator_set_from(&kps);
         let mut bridge = Bridge::new(initial);
 
-        let new_kps = det_keypairs(3);
         // start indices after existing set to avoid overlap
         let new_kps: Vec<Keypair> = (10..13).map(det_keypair).collect();
         let new_set = validator_set_from(&new_kps);
@@ -250,7 +249,7 @@ mod rotation_tests {
         let new_set = validator_set_from(&new_kps);
 
         let epoch = 1u64;
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch)).unwrap();
+        let payload = Bridge::quorum_proof_payload(&[], &new_set, epoch).unwrap();
 
         // kps[0] signs twice, kps[1] signs once → 3 entries but only 2 unique
         let mut proofs = Vec::new();
@@ -280,7 +279,7 @@ mod rotation_tests {
         let new_set = validator_set_from(&new_kps);
 
         let epoch = 1u64;
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch)).unwrap();
+        let payload = Bridge::quorum_proof_payload(&[], &new_set, epoch).unwrap();
 
         let mut proofs = Vec::new();
         // kps[0] appears twice
@@ -459,7 +458,10 @@ mod rotation_tests {
         let mut bridge = Bridge::new(initial);
 
         let sets: Vec<(Vec<Keypair>, Vec<Keypair>)> = vec![
-            (kps_a.clone(), (10..13).map(det_keypair).collect()),
+            // `det_keypair` is deterministic, so regenerating kps_a's range is
+            // equivalent to cloning it — and ed25519-dalek::Keypair doesn't
+            // implement Clone, so we can't clone it directly.
+            ((0..3).map(det_keypair).collect(), (10..13).map(det_keypair).collect()),
             ((10..13).map(det_keypair).collect(), (20..23).map(det_keypair).collect()),
             ((20..23).map(det_keypair).collect(), (30..33).map(det_keypair).collect()),
         ];

@@ -77,7 +77,10 @@ mod supply_rate_split_tests {
                     total,
                     "no-leakage violated: total={total} rf_bps={rf_bps} => d={d} r={r}"
                 );
-                assert!(d >= 0, "negative depositor share: total={total} rf={rf_bps}");
+                assert!(
+                    d >= 0,
+                    "negative depositor share: total={total} rf={rf_bps}"
+                );
                 assert!(r >= 0, "negative reserve share: total={total} rf={rf_bps}");
             }
         }
@@ -151,7 +154,10 @@ mod supply_rate_split_tests {
     fn accrue_split_no_leakage() {
         let split =
             accrue_interest_split(50_000, SECONDS_PER_YEAR, DEFAULT_APR_BPS, 1_500).unwrap();
-        assert_eq!(split.depositor_yield + split.reserve_cut, split.total_interest);
+        assert_eq!(
+            split.depositor_yield + split.reserve_cut,
+            split.total_interest
+        );
     }
 
     /// Zero reserve factor: all interest to depositors, reserve_cut == 0.
@@ -160,9 +166,13 @@ mod supply_rate_split_tests {
         let principal = 100_000i128;
         let elapsed = SECONDS_PER_YEAR;
 
-        let split =
-            accrue_interest_split(principal, elapsed, DEFAULT_APR_BPS, DEFAULT_RESERVE_FACTOR_BPS)
-                .unwrap();
+        let split = accrue_interest_split(
+            principal,
+            elapsed,
+            DEFAULT_APR_BPS,
+            DEFAULT_RESERVE_FACTOR_BPS,
+        )
+        .unwrap();
 
         // With DEFAULT_RESERVE_FACTOR_BPS == 0 the full interest goes to depositors.
         assert_eq!(split.reserve_cut, 0);
@@ -220,8 +230,7 @@ mod supply_rate_split_tests {
         let now = SECONDS_PER_YEAR;
 
         let plain = settle_accrual(&pos, now, DEFAULT_APR_BPS).unwrap();
-        let (split_pos, _split) =
-            settle_accrual_split(&pos, now, DEFAULT_APR_BPS, 1_500).unwrap();
+        let (split_pos, _split) = settle_accrual_split(&pos, now, DEFAULT_APR_BPS, 1_500).unwrap();
 
         assert_eq!(
             split_pos.principal, plain.principal,
@@ -234,17 +243,19 @@ mod supply_rate_split_tests {
     #[test]
     fn settle_split_no_leakage() {
         let pos = position(200_000, 0);
-        let (_, split) = settle_accrual_split(&pos, SECONDS_PER_YEAR, DEFAULT_APR_BPS, 3_000)
-            .unwrap();
-        assert_eq!(split.depositor_yield + split.reserve_cut, split.total_interest);
+        let (_, split) =
+            settle_accrual_split(&pos, SECONDS_PER_YEAR, DEFAULT_APR_BPS, 3_000).unwrap();
+        assert_eq!(
+            split.depositor_yield + split.reserve_cut,
+            split.total_interest
+        );
     }
 
     /// Zero reserve: depositor gets everything.
     #[test]
     fn settle_split_zero_reserve_all_to_depositor() {
         let pos = position(100_000, 0);
-        let (_, split) =
-            settle_accrual_split(&pos, SECONDS_PER_YEAR, DEFAULT_APR_BPS, 0).unwrap();
+        let (_, split) = settle_accrual_split(&pos, SECONDS_PER_YEAR, DEFAULT_APR_BPS, 0).unwrap();
         assert_eq!(split.reserve_cut, 0);
         assert_eq!(split.depositor_yield, split.total_interest);
     }

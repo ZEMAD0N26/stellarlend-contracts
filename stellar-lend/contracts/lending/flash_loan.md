@@ -100,7 +100,7 @@ stuck at `true` after a failed flash loan.
 
 ### Verified by integration tests
 
-The file `tests/flash_callback_revert_test.rs` covers:
+**`tests/flash_callback_revert_test.rs`** — rollback basics:
 
 - `test_reverting_callback_returns_err_and_rolls_back` — callback panics;
   confirms treasury, receiver balance, and `FlashActive` all restored.
@@ -110,6 +110,49 @@ The file `tests/flash_callback_revert_test.rs` covers:
   returns without repaying; confirms full rollback.
 - `test_flash_active_not_stuck_after_consecutive_failures` — two consecutive
   failed loans; `FlashActive` is `false` after each, confirming no stuck flag.
+
+**`tests/flash_loan_repayment.rs`** — end-to-end cross-contract repayment:
+
+| Test | Receiver | Expected outcome |
+|------|----------|-----------------|
+| `test_compliant_receiver_repays_exact` | `CompliantReceiver` | Success; treasury restored |
+| `test_compliant_receiver_over_repays` | `OverRepayingReceiver` (+1) | Success; treasury ≥ original |
+| `test_compliant_receiver_zero_fee` | `CompliantReceiver` (fee=0) | Success; principal only |
+| `test_compliant_receiver_fee_accounting_matches_bps` | `CompliantReceiver` (30 bps) | `fee = amount × 30 / 10_000` |
+| `test_consecutive_flash_loans_succeed` | `CompliantReceiver` ×2 | Both succeed; no stuck flag |
+| `test_malicious_receiver_under_repays_by_one` | `MaliciousReceiver` (−1) | `InsufficientRepayment` panic |
+| `test_malicious_receiver_repays_zero` | `MaliciousReceiver` (×0) | `InsufficientRepayment` panic |
+| `test_rollback_on_under_repayment` | `MaliciousReceiver` (−1) | `Err`; treasury/balance/flag rolled back |
+| `test_flash_active_blocks_deposit_mid_callback` | `DepositAttempter` | `FlashLoanReentrancy` panic |
+| `test_flash_active_blocks_withdraw_mid_callback` | `WithdrawAttempter` | `FlashLoanReentrancy` panic |
+| `test_flash_active_cleared_after_success` | `CompliantReceiver` | `FlashActive = false` |
+| `test_flash_active_cleared_after_failure` | `MaliciousReceiver` | `FlashActive = false` (rollback) |
+
+### Receiver contract interface
+
+Any contract acting as a flash loan receiver must implement:
+
+```rust
+pub fn on_flash_loan(
+    env: Env,
+    initiator: Address,
+    asset: Address,
+    amount: i128,
+    fee: i128,
+    params: Bytes,
+)
+```
+
+Inside the callback the receiver must call `repay_flash_loan(payer, asset, amount + fee)`
+on the lending contract before returning.  The receiver's `Balance(asset, receiver)`
+entry is credited with `amount` before the callback fires, so the full repayment
+can be made without any external funding as long as the receiver holds no other
+obligations.
+
+Receivers that need to over-repay (e.g. to earn yield) may call
+`repay_flash_loan` with any amount ≥ `amount + fee`.  The `flash_loan`
+check is `final_treasury >= original_treasury + fee` (i.e. `>=`, not `==`),
+so over-payment is accepted.
 
 # Flash Loan Reservation Accounting
 

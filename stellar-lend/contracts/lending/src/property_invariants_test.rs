@@ -8,9 +8,8 @@ use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 use soroban_sdk::testutils::Address as _;
 
 const INVARIANT_SEED: [u8; 32] = [
-    0x73, 0x74, 0x65, 0x6c, 0x6c, 0x61, 0x72, 0x6c, 0x65, 0x6e, 0x64, 0x2d, 0x69, 0x6e, 0x76,
-    0x2d, 0x73, 0x65, 0x65, 0x64, 0x2d, 0x30, 0x30, 0x31, 0x2d, 0x61, 0x62, 0x63, 0x64, 0x65,
-    0x66, 0x31,
+    0x73, 0x74, 0x65, 0x6c, 0x6c, 0x61, 0x72, 0x6c, 0x65, 0x6e, 0x64, 0x2d, 0x69, 0x6e, 0x76, 0x2d,
+    0x73, 0x65, 0x65, 0x64, 0x2d, 0x30, 0x30, 0x31, 0x2d, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x31,
 ];
 const PROPERTY_CASES: u32 = 128;
 const MAX_OPS_PER_CASE: usize = 64;
@@ -101,9 +100,17 @@ fn property_random_operation_sequences_preserve_invariants() {
                     }
                     Operation::Borrow(amount) => {
                         let amount = amount as i128;
-                        let call = client.try_borrow(&user, &amount);
-                        prop_assert!(call.is_ok());
-                        expected_debt += amount;
+                        let position = client.get_position(&user);
+
+                        // Only borrow if collateral can support it based on contract limits (80% LTV)
+                        // collateral * LIQUIDATION_THRESHOLD_BPS >= new_debt * HEALTH_FACTOR_SCALE
+                        if position.collateral.saturating_mul(8000)
+                            >= position.debt.saturating_add(amount).saturating_mul(10000)
+                        {
+                            let call = client.try_borrow(&user, &amount);
+                            prop_assert!(call.is_ok());
+                            expected_debt += amount;
+                        }
                     }
                     Operation::Repay(amount) => {
                         let amount = amount as i128;

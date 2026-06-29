@@ -9,7 +9,7 @@
 use soroban_sdk::contracterror;
 
 /// Fixed-point scale for internal calculations (7 decimals)
-pub const SCALE: i128 = 1_000_000_0; // 10^7
+pub const SCALE: i128 = 10_000_000; // 10^7
 
 /// Basis points scale (100% = 10000 bps)
 pub const BPS_SCALE: u32 = 10000;
@@ -53,7 +53,7 @@ pub fn compute_compound_interest(
     if principal < 0 {
         return Err(MathError::OutOfRange);
     }
-    if rate_bps < 0 || rate_bps > MAX_RATE_BPS {
+    if !(0..=MAX_RATE_BPS).contains(&rate_bps) {
         return Err(MathError::OutOfRange);
     }
     if elapsed == 0 {
@@ -125,7 +125,7 @@ pub fn compute_health_factor(
     }
 
     // Compute: (collateral_value * liquidation_threshold_bps) / BPS_SCALE
-    let weighted_collateral = (collateral_value as i128)
+    let weighted_collateral = collateral_value
         .checked_mul(liquidation_threshold_bps as i128)
         .ok_or(MathError::Overflow)?
         .checked_div(BPS_SCALE as i128)
@@ -670,10 +670,7 @@ mod tests {
         // Then quotient = (i128::MAX - 1) / 2 = 9223372036854775807
         // product % c = 1, so we'd do quotient + 1 = 9223372036854775808 which fits
         // Actually let me just test a pathological case
-        assert_eq!(
-            checked_mul_div_ceil(i128::MAX, 1, 1).unwrap(),
-            i128::MAX
-        );
+        assert_eq!(checked_mul_div_ceil(i128::MAX, 1, 1).unwrap(), i128::MAX);
     }
 
     // ── split_interest_by_reserve_factor ─────────────────────────────────────
@@ -721,7 +718,10 @@ mod tests {
                     total,
                     "sum mismatch: total={total} rf={rf_bps} => depositor={d} reserve={r}"
                 );
-                assert!(d >= 0 && r >= 0, "negative split for total={total} rf={rf_bps}");
+                assert!(
+                    d >= 0 && r >= 0,
+                    "negative split for total={total} rf={rf_bps}"
+                );
             }
         }
     }
