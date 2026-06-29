@@ -3,7 +3,7 @@ use soroban_sdk::{Address, Env, Vec};
 use crate::debt::{DebtPosition, DEFAULT_APR_BPS};
 use crate::{
     check_emergency_status, check_pause_status, AssetParams, DataKey, LendingError, PriceRecord,
-    ProtocolAction,
+    ProtocolAction, DEFAULT_ORACLE_MAX_AGE_SECS,
 };
 
 const PRICE_DIVISOR: i128 = 10_000_000;
@@ -86,7 +86,7 @@ pub fn load_asset_params(env: &Env, asset: &Address) -> Option<AssetParams> {
 /// Returns [`LendingError::PriceFeedNotFound`] if no price has been stored for
 /// this asset.
 pub fn get_price_for_asset(env: &Env, asset: &Address) -> Result<PriceRecord, LendingError> {
-    let record = env
+    let record: PriceRecord = env
         .storage()
         .persistent()
         .get(&DataKey::OraclePrice(asset.clone()))
