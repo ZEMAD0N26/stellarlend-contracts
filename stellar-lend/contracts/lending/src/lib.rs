@@ -108,19 +108,20 @@ mod self_liquidation_test;
 #[cfg(test)]
 mod supply_rate_split_test;
 #[cfg(test)]
+mod effective_supply_rate_test;
+
+#[cfg(test)]
 mod utilization_history_test;
-#[cfg(test)]
-mod accrual_idempotency_test;
-
-#[cfg(test)]
-mod interest_ordering_time_test;
-
-#[cfg(test)]
-mod events_test;
-
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol};
-use debt::{borrow_amount, load_debt, save_debt, DebtPosition, DEFAULT_APR_BPS, repay_amount, effective_debt};
-use events::{emit_borrow, emit_deposit, emit_liquidate, emit_repay, emit_schema_version, emit_withdraw};
+use debt::{
+    borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,
+    DebtPosition, DEFAULT_APR_BPS,
+};
+use soroban_sdk::token::Client as TokenClient;
+use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
+    Env, IntoVal, Symbol, Val, Vec,
+};
 
 const PERSISTENT_TTL_LEDGERS: u32 = 1_000_000;
 const DEFAULT_DEPOSIT_CAP: i128 = 1_000_000_000_000;
@@ -3403,4 +3404,5 @@ pub(crate) mod test {
         assert!(env.ledger().sequence() >= 0);
     }
 }
-#[cfg(test)] mod compound_interest_proptest;
+#[cfg(test)]
+mod max_borrow_proptest;
