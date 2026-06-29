@@ -578,6 +578,22 @@ pub fn borrow_asset_internal(
         }
         return Err(LendingError::DebtCeilingExceeded);
     }
+    // Enforce optional per-asset borrow cap: 0 means uncapped.
+    if params.borrow_cap != 0 && new_total_debt > params.borrow_cap {
+        save_debt_asset(
+            env,
+            user,
+            asset,
+            &DebtPosition {
+                principal: prev_principal,
+                last_update: now,
+            },
+        );
+        if prev_principal == 0 {
+            remove_from_user_debt_list(env, user, asset);
+        }
+        return Err(LendingError::BorrowCapExceeded);
+    }
     env.storage()
         .persistent()
         .set(&DataKey::TotalDebtAsset(asset.clone()), &new_total_debt);

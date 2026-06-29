@@ -280,6 +280,9 @@ pub enum LendingError {
     PositionHealthy = 1011,
     DebtCeilingExceeded = 2001,
     DepositCapExceeded = 2002,
+    /// A borrow would push total outstanding debt for the asset beyond the
+    /// configured per-asset `borrow_cap`.
+    BorrowCapExceeded = 2003,
     InvalidFeeBps = 2005,
     InvalidFlashUtilizationBps = 2006,
     InsufficientCollateral = 2007,
@@ -394,6 +397,9 @@ pub struct AssetParams {
     pub ltv_bps: i128,
     pub liquidation_threshold_bps: i128,
     pub debt_ceiling: i128,
+    /// Per-asset protocol borrow cap: maximum total outstanding debt for this asset.
+    /// A value of 0 means uncapped (no limit enforced).
+    pub borrow_cap: i128,
 }
 
 #[contracttype]
@@ -411,6 +417,7 @@ pub struct AssetParamsSetEvent {
     pub ltv_bps: i128,
     pub liquidation_threshold_bps: i128,
     pub debt_ceiling: i128,
+    pub borrow_cap: i128,
 }
 
 #[contractevent]
@@ -1687,6 +1694,7 @@ impl LendingContract {
         ltv_bps: i128,
         liquidation_threshold_bps: i128,
         debt_ceiling: i128,
+        borrow_cap: i128,
     ) -> Result<(), LendingError> {
         admin.require_auth();
         if admin != Self::get_admin(env.clone()) {
@@ -1701,11 +1709,15 @@ impl LendingContract {
         if debt_ceiling < 0 {
             return Err(LendingError::InvalidAmount);
         }
+        if borrow_cap < 0 {
+            return Err(LendingError::InvalidAmount);
+        }
 
         let params = AssetParams {
             ltv_bps,
             liquidation_threshold_bps,
             debt_ceiling,
+            borrow_cap,
         };
         cross_asset::set_asset_params_internal(&env, &asset, &params);
 
@@ -1714,6 +1726,7 @@ impl LendingContract {
             ltv_bps,
             liquidation_threshold_bps,
             debt_ceiling,
+            borrow_cap,
         }
         .publish(&env);
 
