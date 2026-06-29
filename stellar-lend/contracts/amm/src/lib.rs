@@ -828,3 +828,5 @@ pub fn get_fee_tiers(env: Env) -> Vec<u128> {
 }
 #[cfg(test)]
 mod dynamic_fee_test;
+#[cfg(test)]
+mod inverse_swap_proptest;
