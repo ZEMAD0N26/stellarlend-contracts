@@ -1,9 +1,8 @@
 #![no_std]
 
-pub mod cross_asset;
-pub mod debt;
-pub mod math;
-pub mod rate_model;
+mod debt;
+mod events;
+pub mod rounding_strategy;
 
 #[cfg(test)]
 mod cross_asset_roundtrip_test;
@@ -107,16 +106,15 @@ mod effective_supply_rate_test;
 #[cfg(test)]
 mod utilization_history_test;
 
-use debt::{
-    borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,
-    DebtPosition, DEFAULT_APR_BPS,
-};
-use soroban_sdk::token::Client as TokenClient;
-use soroban_sdk::xdr::ToXdr;
-use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
-    Env, IntoVal, Symbol, Val, Vec,
-};
+#[cfg(test)]
+mod interest_ordering_time_test;
+
+#[cfg(test)]
+mod events_test;
+
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol};
+use debt::{borrow_amount, load_debt, save_debt, DebtPosition, DEFAULT_APR_BPS, repay_amount, effective_debt};
+use events::{emit_borrow, emit_deposit, emit_liquidate, emit_repay, emit_schema_version, emit_withdraw};
 
 const PERSISTENT_TTL_LEDGERS: u32 = 1_000_000;
 const DEFAULT_DEPOSIT_CAP: i128 = 1_000_000_000_000;
@@ -471,14 +469,8 @@ impl LendingContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         set_emergency_state_internal(&env, EmergencyState::Normal);
-        // Seed global borrow index at 1.0 (INDEX_SCALE).
-        debt::save_borrow_index(&env, INDEX_SCALE);
-        debt::save_last_index_update(&env, env.ledger().timestamp());
-        // Initialise an empty borrower list for migration support.
-        let empty: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
-        env.storage()
-            .instance()
-            .set(&DataKey::BorrowerList, &empty);
+        // Emit schema version event for indexers
+        emit_schema_version(&env);
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -984,7 +976,11 @@ impl LendingContract {
             .persistent()
             .set(&DataKey::TotalDeposits, &new_total);
         extend_collateral_ttl(&env, &user);
-        Ok(new_balance)
+        
+        // Emit deposit event
+        emit_deposit(&env, &user, amount, new_balance);
+        
+        new_balance
     }
 
     /// Withdraw collateral after pause and emergency gates pass.
@@ -1016,7 +1012,11 @@ impl LendingContract {
                 .expect("withdraw: total deposits underflow"),
         );
         extend_collateral_ttl(&env, &user);
-        Ok(new_balance)
+        
+        // Emit withdraw event
+        emit_withdraw(&env, &user, amount, new_balance);
+        
+        new_balance
     }
 
     /// Set the configured valuation collateral asset for the legacy single-asset flows.
@@ -1107,9 +1107,12 @@ impl LendingContract {
         assert_borrow_solvent(&env, &user, &updated, new_total_debt)?;
 
         save_debt(&env, &user, &updated);
-        env.storage()
-            .persistent()
-            .set(&DataKey::TotalDebt, &new_total_debt);
+        // Extend TTL to prevent archival of debt entry
+        extend_debt_ttl(&env, &user);
+        
+        // Emit borrow event
+        emit_borrow(&env, &user, amount, updated.principal);
+        
         Ok(updated.principal)
     }
 
@@ -1368,97 +1371,18 @@ impl LendingContract {
                 amount
             };
 
-            // Dust guard: a repay of 0 would make the liquidation a no-op.
-            if actual_repay <= 0 {
-                return Err(LendingError::InvalidAmount);
-            }
+        // Emit liquidate event
+        emit_liquidate(
+            &env,
+            &liquidator,
+            &borrower,
+            actual_repay,
+            final_seized,
+            new_debt,
+            new_col,
+        );
 
-            // Liquidation incentive: floor rounding.
-            // actual_repay * 11000 / 10000 — rounding down means the liquidator
-            // receives *less* collateral than the exact 10 % bonus.  The sub-unit
-            // remainder stays with the borrower (or protocol), preventing value
-            // extraction via repeated dust-sized liquidations.
-            const INCENTIVE_BPS: i128 = 1000;
-            let seized_collateral =
-                math::checked_mul_div_floor(actual_repay, BPS_DENOM + INCENTIVE_BPS, BPS_DENOM)
-                    .map_err(|_| LendingError::Overflow)?;
-
-            // Clamp: never seize more than the borrower's available collateral.
-            // When the incentivized seizure exceeds available collateral, the
-            // shortfall is written off as protocol bad debt (with a backstop event)
-            // rather than silently lost.
-            let available_collateral = collateral;
-            let final_seized = if seized_collateral > available_collateral {
-                let shortfall = seized_collateral
-                    .checked_sub(available_collateral)
-                    .ok_or(LendingError::Overflow)?;
-                let insurance_drawn = draw_insurance(&env, shortfall)?;
-                let residual = shortfall
-                    .checked_sub(insurance_drawn)
-                    .ok_or(LendingError::Overflow)?;
-                if residual > 0 {
-                    let current_bad_debt: i128 = env
-                        .storage()
-                        .persistent()
-                        .get(&DataKey::BadDebt)
-                        .unwrap_or(0i128);
-                    let new_bad_debt = current_bad_debt
-                        .checked_add(residual)
-                        .ok_or(LendingError::Overflow)?;
-                    env.storage()
-                        .persistent()
-                        .set(&DataKey::BadDebt, &new_bad_debt);
-                    #[allow(deprecated)]
-                    env.events()
-                        .publish((Symbol::new(&env, "bad_debt"), borrower.clone()), residual);
-                }
-                available_collateral
-            } else {
-                seized_collateral
-            };
-
-            // Invariant: close-factor clamp guarantees actual_repay <= debt,
-            // and the seizure clamp guarantees final_seized <= collateral.
-            // checked_sub surfaces any violation loudly instead of silently
-            // flooring to zero (which would mask an accounting bug).
-            let new_debt = debt
-                .checked_sub(actual_repay)
-                .ok_or(LendingError::Overflow)?;
-            let new_col = collateral
-                .checked_sub(final_seized)
-                .ok_or(LendingError::Overflow)?;
-
-            let updated_position = DebtPosition {
-                principal: new_debt,
-                last_update: settled_position.last_update,
-            };
-            save_debt(&env, &borrower, &updated_position);
-            env.storage().persistent().set(&col_key, &new_col);
-
-            let debt_token_client = TokenClient::new(&env, &debt_asset);
-            let collateral_token_client = TokenClient::new(&env, &collateral_asset);
-            debt_token_client.transfer(&liquidator, env.current_contract_address(), &actual_repay);
-            collateral_token_client.transfer(
-                &env.current_contract_address(),
-                &liquidator,
-                &final_seized,
-            );
-
-            let shortfall = seized_collateral - final_seized;
-
-            LiquidationEventV1 {
-                schema_version: SCHEMA_VERSION_V1,
-                liquidator: liquidator.clone(),
-                borrower: borrower.clone(),
-                repaid: actual_repay,
-                seized: final_seized,
-                health_factor_before: hf,
-                shortfall,
-            }
-            .publish(&env);
-
-            Ok(actual_repay)
-        })
+        Ok(actual_repay)
     }
 
     pub fn repay(env: Env, user: Address, amount: i128) -> Result<i128, LendingError> {
@@ -1494,7 +1418,11 @@ impl LendingContract {
             .persistent()
             .set(&DataKey::TotalDebt, &new_total_debt);
         extend_debt_ttl(&env, &user);
-        Ok(updated.principal)
+        
+        // Emit repay event
+        emit_repay(&env, &user, amount, updated.principal);
+        
+        updated.principal
     }
 
     pub fn get_debt_position(env: Env, user: Address) -> DebtPosition {
