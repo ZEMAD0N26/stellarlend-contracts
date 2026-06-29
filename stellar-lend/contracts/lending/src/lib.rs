@@ -89,6 +89,8 @@ mod rate_hysteresis_test;
 #[cfg(test)]
 mod rate_smoothing_state_test;
 #[cfg(test)]
+mod rate_persistence_test;
+#[cfg(test)]
 mod repay_debt_floor_test;
 #[cfg(test)]
 mod repay_overpay_test;
