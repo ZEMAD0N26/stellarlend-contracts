@@ -435,6 +435,7 @@ fn hf_bench_no_extra_reads_hidden_in_collateral_loop() {
              (got {reads_per_asset} between n={} and n={n})",
             sizes[w - 1]
         );
+
         prev_reads = curr_reads;
     }
 }
@@ -460,6 +461,7 @@ fn hf_bench_no_extra_reads_hidden_in_debt_loop() {
              (got {reads_per_asset} between m={} and m={m})",
             sizes[w - 1]
         );
+
         prev_reads = curr_reads;
     }
 }

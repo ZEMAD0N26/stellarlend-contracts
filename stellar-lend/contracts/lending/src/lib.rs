@@ -67,7 +67,13 @@ mod liquidate_transfer_test;
 #[cfg(test)]
 mod liquidation_bonus_proptest;
 #[cfg(test)]
+mod mul_div_proptest;
+#[cfg(test)]
+mod liquidation_branch_test;
+#[cfg(test)]
 mod liquidation_sequence_invariant_test;
+#[cfg(test)]
+mod max_borrow_proptest;
 #[cfg(test)]
 mod oracle_payload_binding_test;
 #[cfg(test)]
@@ -81,15 +87,25 @@ mod rate_cache_test;
 #[cfg(test)]
 mod rate_hysteresis_test;
 #[cfg(test)]
+mod rate_smoothing_state_test;
+#[cfg(test)]
+mod rate_persistence_test;
+#[cfg(test)]
 mod repay_debt_floor_test;
 #[cfg(test)]
 mod repay_overpay_test;
+#[cfg(test)]
+mod reserve_split_proptest;
 #[cfg(test)]
 mod rounding_drift_test;
 #[cfg(test)]
 mod self_liquidation_test;
 #[cfg(test)]
 mod supply_rate_split_test;
+#[cfg(test)]
+mod effective_supply_rate_test;
+#[cfg(test)]
+mod utilization_history_test;
 
 use debt::{
     borrow_amount, cached_borrow_rate, effective_debt, load_debt, repay_amount, save_debt,
@@ -108,11 +124,19 @@ const DEFAULT_DEPOSIT_CAP: i128 = 1_000_000_000_000;
 pub(crate) const HEALTH_FACTOR_SCALE: i128 = 10_000;
 const HEALTH_FACTOR_NO_DEBT: i128 = 100_000_000;
 pub const LIQUIDATION_THRESHOLD_BPS: i128 = 8000;
+/// Maximum fraction of debt that can be repaid in a single liquidation call (50 %).
+pub const CLOSE_FACTOR: i128 = 5000;
 const DEFAULT_ORACLE_MAX_AGE_SECS: u64 = 3600;
 const ORACLE_SIGNATURE_DOMAIN: &[u8] = b"StellarLendOracle";
 const BPS_DENOM: i128 = 10_000;
 const SCHEMA_VERSION_V1: u32 = 1;
 const DEFAULT_MAX_FLASH_BPS: i128 = 10_000;
+/// Maximum number of utilization samples retained in persistent storage.
+///
+/// Samples are kept in an oldest-first bounded vector internally. When the cap
+/// is reached, the next write evicts exactly one oldest entry before appending
+/// the newest sample, keeping rent and read cost bounded.
+pub const UTILIZATION_HISTORY_CAPACITY: u32 = 256;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +190,8 @@ pub enum DataKey {
     /// Running total of debt currently backed by this isolated asset.
     /// Incremented on borrow, decremented on repay. Stored as `persistent`.
     IsolationDebt(Address),
+    /// Ring-buffered protocol utilization samples, stored oldest-first.
+    UtilizationHistory,
 }
 
 #[contractevent]
@@ -272,6 +298,9 @@ pub enum LendingError {
     PositionHealthy = 1011,
     DebtCeilingExceeded = 2001,
     DepositCapExceeded = 2002,
+    /// A borrow would push total outstanding debt for the asset beyond the
+    /// configured per-asset `borrow_cap`.
+    BorrowCapExceeded = 2003,
     InvalidFeeBps = 2005,
     InvalidFlashUtilizationBps = 2006,
     InsufficientCollateral = 2007,
@@ -287,6 +316,7 @@ pub enum LendingError {
     StaleOracleTimestamp = 5002,
     OraclePubkeyNotSet = 5003,
     MaxMoveBpsExceeded = 5004,
+    OracleReplay = 5005,
     /// The asset has not been configured via set_asset_params.
     AssetNotConfigured = 3001,
     /// Oracle price record is missing for the requested asset.
@@ -353,6 +383,39 @@ pub struct ProtocolMetrics {
     pub ledger: u32,
 }
 
+/// Versioned read model for borrow-rate smoothing state persisted by the rate model.
+///
+/// This struct is intentionally append-only for indexer stability. The
+/// `schema_version` field lets downstream decoders reject unknown future
+/// versions instead of guessing at field semantics.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RateSmoothingState {
+    /// Schema version for this view response. Version 1 contains the persisted
+    /// smoothed rate, last target rate, and last-update ledger.
+    pub schema_version: u32,
+    /// Last effective borrow rate persisted under `RateModelKey::LastRate`.
+    pub current_rate_bps: i128,
+    /// Last target rate persisted under `RateModelKey::LastTargetRate`.
+    pub last_target_rate_bps: i128,
+    /// Last ledger sequence persisted under `RateModelKey::LastRateLedger`.
+    pub last_update_ledger: u32,
+}
+
+/// Point-in-time protocol utilization sample.
+///
+/// Samples are written from the borrow-rate recomputation path and retained in
+/// a fixed-capacity ring buffer. They are stable contract values intended for
+/// off-chain decoding and trend charting.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UtilizationSample {
+    /// Ledger sequence at which the rate path observed this utilization.
+    pub ledger: u32,
+    /// Utilization in basis points: `total_debt * 10_000 / total_deposits`.
+    pub utilization_bps: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PositionSummary {
@@ -367,6 +430,9 @@ pub struct AssetParams {
     pub ltv_bps: i128,
     pub liquidation_threshold_bps: i128,
     pub debt_ceiling: i128,
+    /// Per-asset protocol borrow cap: maximum total outstanding debt for this asset.
+    /// A value of 0 means uncapped (no limit enforced).
+    pub borrow_cap: i128,
 }
 
 #[contracttype]
@@ -384,6 +450,7 @@ pub struct AssetParamsSetEvent {
     pub ltv_bps: i128,
     pub liquidation_threshold_bps: i128,
     pub debt_ceiling: i128,
+    pub borrow_cap: i128,
 }
 
 #[contractevent]
@@ -443,6 +510,33 @@ impl LendingContract {
             .unwrap_or(0i128)
     }
 
+    /// Return the persisted borrow-rate smoothing state without recomputing rates.
+    ///
+    /// This view is intentionally read-only: it does not call `current_borrow_rate`,
+    /// does not write cache entries, and does not mutate rate-model storage. When
+    /// smoothing has never been initialized, all numeric state fields return `0`
+    /// with `schema_version = 1`.
+    pub fn get_rate_smoothing_state(env: Env) -> RateSmoothingState {
+        RateSmoothingState {
+            schema_version: SCHEMA_VERSION_V1,
+            current_rate_bps: env
+                .storage()
+                .instance()
+                .get(&rate_model::RateModelKey::LastRate)
+                .unwrap_or(0),
+            last_target_rate_bps: env
+                .storage()
+                .instance()
+                .get(&rate_model::RateModelKey::LastTargetRate)
+                .unwrap_or(0),
+            last_update_ledger: env
+                .storage()
+                .instance()
+                .get(&rate_model::RateModelKey::LastRateLedger)
+                .unwrap_or(0),
+        }
+    }
+
     /// Set the configured oracle pubkey used to verify signed price updates.
     pub fn set_oracle_pubkey(env: Env, pubkey: BytesN<32>) {
         assert_admin(&env);
@@ -495,6 +589,16 @@ impl LendingContract {
         let now = env.ledger().timestamp();
         if timestamp > now || now > timestamp.saturating_add(DEFAULT_ORACLE_MAX_AGE_SECS) {
             return Err(LendingError::StaleOracleTimestamp);
+        }
+        // Monotonic timestamp enforcement
+        if let Some(last) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PriceRecord>(&DataKey::OraclePrice(asset.clone()))
+        {
+            if timestamp <= last.timestamp {
+                return Err(LendingError::OracleReplay);
+            }
         }
 
         let oracle_pubkey: BytesN<32> = env
@@ -1257,10 +1361,9 @@ impl LendingContract {
             }
 
             // Close-factor cap: floor rounding.
-            // debt * 5000 / 10000 — rounding down means the liquidator can extinguish
+            // debt * CLOSE_FACTOR / BPS_DENOM — rounding down means the liquidator can extinguish
             // *at most* 50 % of debt, and possibly slightly less.  This is conservative:
             // the protocol retains more liquidation opportunities.
-            const CLOSE_FACTOR: i128 = 5000;
             let max_repay = math::checked_mul_div_floor(debt, CLOSE_FACTOR, BPS_DENOM)
                 .map_err(|_| LendingError::Overflow)?;
             let actual_repay = if amount > max_repay {
@@ -1618,6 +1721,15 @@ impl LendingContract {
         }
     }
 
+    /// Return recent protocol utilization samples newest-first.
+    ///
+    /// The view is read-only and returns an empty vector when no rate update has
+    /// written a sample yet. Each sample contains the ledger sequence and the
+    /// utilization observed in basis points.
+    pub fn get_utilization_history(env: Env) -> Vec<UtilizationSample> {
+        utilization_history_newest_first(&env)
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Cross-Asset Entrypoints
     // ════════════════════════════════════════════════════════════════
@@ -1633,6 +1745,7 @@ impl LendingContract {
         ltv_bps: i128,
         liquidation_threshold_bps: i128,
         debt_ceiling: i128,
+        borrow_cap: i128,
     ) -> Result<(), LendingError> {
         admin.require_auth();
         if admin != Self::get_admin(env.clone()) {
@@ -1647,11 +1760,15 @@ impl LendingContract {
         if debt_ceiling < 0 {
             return Err(LendingError::InvalidAmount);
         }
+        if borrow_cap < 0 {
+            return Err(LendingError::InvalidAmount);
+        }
 
         let params = AssetParams {
             ltv_bps,
             liquidation_threshold_bps,
             debt_ceiling,
+            borrow_cap,
         };
         cross_asset::set_asset_params_internal(&env, &asset, &params);
 
@@ -1660,6 +1777,7 @@ impl LendingContract {
             ltv_bps,
             liquidation_threshold_bps,
             debt_ceiling,
+            borrow_cap,
         }
         .publish(&env);
 
@@ -2423,6 +2541,53 @@ fn assert_borrow_solvent(
 
 fn current_borrow_rate(env: &Env) -> i128 {
     cached_borrow_rate(env)
+}
+
+pub(crate) fn write_utilization_sample(env: &Env, utilization_bps: i128) {
+    let mut samples = utilization_history_oldest_first(env);
+
+    if let Some(last) = samples.last() {
+        let last: UtilizationSample = last;
+        if last.ledger == env.ledger().sequence() {
+            return;
+        }
+    }
+
+    while samples.len() >= UTILIZATION_HISTORY_CAPACITY {
+        samples.remove(0);
+    }
+
+    samples.push_back(UtilizationSample {
+        ledger: env.ledger().sequence(),
+        utilization_bps,
+    });
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::UtilizationHistory, &samples);
+}
+
+/// Load utilization samples in their storage order, oldest-first.
+pub(crate) fn utilization_history_oldest_first(env: &Env) -> Vec<UtilizationSample> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::UtilizationHistory)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Load utilization samples in view order, newest-first.
+fn utilization_history_newest_first(env: &Env) -> Vec<UtilizationSample> {
+    let samples = utilization_history_oldest_first(env);
+    let mut newest_first = Vec::new(env);
+    let mut index = samples.len();
+
+    while index > 0 {
+        index -= 1;
+        let sample: UtilizationSample = samples.get(index).unwrap();
+        newest_first.push_back(sample);
+    }
+
+    newest_first
 }
 
 fn require_fresh_valuation_prices(env: &Env) -> Result<(), LendingError> {

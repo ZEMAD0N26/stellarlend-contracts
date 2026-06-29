@@ -10,9 +10,7 @@ fn setup_with_params(
 ) -> (Env, LendingContractClient<'static>, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
-    let mut li = env.ledger().get();
-    li.sequence_number = 100;
-    env.ledger().set(li);
+    env.ledger().with_mut(|l| l.sequence_number = 100);
 
     let id = env.register(LendingContract, ());
     let client = LendingContractClient::new(&env, &id);
@@ -77,18 +75,14 @@ fn contract_view_keeps_rate_flat_inside_band_and_respects_clamp() {
         assert_eq!(crate::current_borrow_rate(&env), 1_100);
     });
 
-    let mut li = env.ledger().get();
-    li.sequence_number = 101;
-    env.ledger().set(li);
+    env.ledger().with_mut(|l| l.sequence_number = 101);
     client.borrow(&user, &100);
 
     env.as_contract(&client.address, || {
         assert_eq!(crate::current_borrow_rate(&env), 1_700);
     });
 
-    let mut li = env.ledger().get();
-    li.sequence_number = 102;
-    env.ledger().set(li);
+    env.ledger().with_mut(|l| l.sequence_number = 102);
     client.borrow(&user, &900);
 
     env.as_contract(&client.address, || {

@@ -64,7 +64,7 @@ mod rotation_tests {
         epoch: u64,
         signers: &[&Keypair],
     ) -> Vec<(ed25519_dalek::PublicKey, Signature)> {
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch))
+        let payload = Bridge::quorum_proof_payload(&[], new_set, epoch)
             .expect("serialization must not fail");
         signers
             .iter()
@@ -249,7 +249,7 @@ mod rotation_tests {
         let new_set = validator_set_from(&new_kps);
 
         let epoch = 1u64;
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch)).unwrap();
+        let payload = Bridge::quorum_proof_payload(&[], &new_set, epoch).unwrap();
 
         // kps[0] signs twice, kps[1] signs once → 3 entries but only 2 unique
         let mut proofs = Vec::new();
@@ -279,7 +279,7 @@ mod rotation_tests {
         let new_set = validator_set_from(&new_kps);
 
         let epoch = 1u64;
-        let payload = bincode::serialize(&(new_set.to_bytes_vec(), epoch)).unwrap();
+        let payload = Bridge::quorum_proof_payload(&[], &new_set, epoch).unwrap();
 
         let mut proofs = Vec::new();
         // kps[0] appears twice

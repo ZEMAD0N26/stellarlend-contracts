@@ -28,7 +28,7 @@ fn setup_pool(ra: i128, rb: i128) -> (Env, AmmContractClient<'static>) {
     env.mock_all_auths();
     let id = env.register(AmmContract, ());
     let client = AmmContractClient::new(&env, &id);
-    client.init_pool(&ra, &rb);
+    client.init_pool(&ra, &rb).unwrap();
     // SAFETY: env outlives the returned client via the tuple
     let client: AmmContractClient<'static> = unsafe { core::mem::transmute(client) };
     (env, client)

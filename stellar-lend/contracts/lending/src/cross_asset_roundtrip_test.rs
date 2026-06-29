@@ -1,8 +1,11 @@
 #![cfg(test)]
 
-use crate::{DataKey, LendingContract, LendingContractClient, MockAsset, PriceRecord};
-use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
-use soroban_sdk::{Address, Env, Vec};
+use crate::{DataKey, PriceRecord};
+use crate::{LendingContract, LendingContractClient};
+use soroban_sdk::testutils::{Address as _, Ledger};
+
+use crate::MockAsset;
+use soroban_sdk::{Address, Env};
 
 fn setup() -> (
     Env,
@@ -31,6 +34,7 @@ fn setup() -> (
         &7500,                  // 75% LTV
         &8000,                  // 80% liquidation threshold
         &1_000_000_000_000i128, // debt ceiling
+        &0i128,                 // borrow_cap (0 = uncapped)
     );
     client.set_asset_params(
         &admin,
@@ -38,6 +42,7 @@ fn setup() -> (
         &6000,                  // 60% LTV
         &7000,                  // 70% liquidation threshold
         &1_000_000_000_000i128, // debt ceiling
+        &0i128,                 // borrow_cap (0 = uncapped)
     );
 
     // Set oracle prices: 10_000_000 = $1.00 (7-decimal precision)
@@ -77,11 +82,11 @@ fn test_cross_asset_borrow_repay_roundtrip() {
             .get(&DataKey::TotalDebtAsset(asset_a.clone()))
             .unwrap_or(0)
     });
-    let initial_user_debt_list: Vec<Address> = env.as_contract(&id, || {
+    let initial_user_debt_list: soroban_sdk::Vec<Address> = env.as_contract(&id, || {
         env.storage()
             .persistent()
             .get(&DataKey::UserDebtAssets(user.clone()))
-            .unwrap_or(Vec::new(&env))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
     });
     assert!(initial_user_debt_list.is_empty());
 
@@ -91,11 +96,11 @@ fn test_cross_asset_borrow_repay_roundtrip() {
     assert_eq!(principal, borrow_amount);
 
     // Check debt list
-    let mid_borrow_debt_list: Vec<Address> = env.as_contract(&id, || {
+    let mid_borrow_debt_list: soroban_sdk::Vec<Address> = env.as_contract(&id, || {
         env.storage()
             .persistent()
             .get(&DataKey::UserDebtAssets(user.clone()))
-            .unwrap_or(Vec::new(&env))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
     });
     assert_eq!(mid_borrow_debt_list.len(), 1);
     assert_eq!(mid_borrow_debt_list.get(0).unwrap(), asset_a);
@@ -111,10 +116,10 @@ fn test_cross_asset_borrow_repay_roundtrip() {
 
     // 3. Advance Ledger Time (Accrue Interest)
     // Fast forward 1 year (31536000 seconds)
-    let mut li: LedgerInfo = env.ledger().get();
-    li.timestamp = li.timestamp.saturating_add(31_536_000);
-    li.sequence_number = li.sequence_number.saturating_add(100_000);
-    env.ledger().set(li);
+    env.ledger().with_mut(|l| {
+        l.timestamp += 31536000;
+        l.sequence_number += 100000;
+    });
 
     // We can't directly check the accrued interest from standard methods without triggering a read that accrues
     // Repaying with an amount larger than the debt will refund the excess
@@ -129,11 +134,11 @@ fn test_cross_asset_borrow_repay_roundtrip() {
     assert_eq!(remaining_debt, 0);
 
     // Assert debt list is cleared
-    let post_repay_debt_list: Vec<Address> = env.as_contract(&id, || {
+    let post_repay_debt_list: soroban_sdk::Vec<Address> = env.as_contract(&id, || {
         env.storage()
             .persistent()
             .get(&DataKey::UserDebtAssets(user.clone()))
-            .unwrap_or(Vec::new(&env))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
     });
     assert!(
         post_repay_debt_list.is_empty(),
