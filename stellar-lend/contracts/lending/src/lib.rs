@@ -109,6 +109,8 @@ mod self_liquidation_test;
 mod supply_rate_split_test;
 #[cfg(test)]
 mod utilization_history_test;
+#[cfg(test)]
+mod accrual_idempotency_test;
 
 #[cfg(test)]
 mod interest_ordering_time_test;
