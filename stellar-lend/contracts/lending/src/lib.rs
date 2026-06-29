@@ -3403,26 +3403,4 @@ pub(crate) mod test {
         assert!(env.ledger().sequence() >= 0);
     }
 }
-
-#[contractimpl]
-impl LendingContract {
-    pub fn withdraw_reserve(env: Env, asset: Address, amount: i128, to: Address) {
-        assert_admin(&env);
-        to.require_auth();
-
-        let current = read_reserve(&env, &asset);
-        if amount <= 0 || amount > current {
-            panic!("Invalid withdraw amount");
-        }
-
-        write_reserve(&env, &asset, current - amount);
-
-        let token_client = token::Client::new(&env, &asset);
-        token_client.transfer(&env.current_contract_address(), &to, &amount);
-
-        env.events().publish(
-            (symbol_short!("reserve"), symbol_short!("withdraw"), asset),
-            (amount, to),
-        );
-    }
-}
+#[cfg(test)] mod compound_interest_proptest;
