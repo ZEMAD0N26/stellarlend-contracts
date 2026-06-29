@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-pub use soroban_sdk::{contracttype, contractevent, Address, Env, Val, IntoVal, Vec, Symbol};
+pub use soroban_sdk::{contractevent, contracttype, Address, Env, IntoVal, Symbol, Val, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -300,7 +300,10 @@ impl VestingContract {
             cliff_seconds,
             revoked: false,
         };
-        self.grants.entry(grantee.to_string()).or_default().push(grant);
+        self.grants
+            .entry(grantee.to_string())
+            .or_default()
+            .push(grant);
         let bal = self.balances.entry("contract".to_string()).or_default();
         *bal += total;
         self.total_locked += total;
@@ -514,9 +517,9 @@ impl VestingContract {
     ///
     /// `grantee` is the beneficiary address whose grants should be returned.
     pub fn get_grantee(&self, grantee: &str) -> Option<Address> {
-        self.grants.get(grantee).and_then(|grants| {
-            grants.first().map(|grant| grant.grantee.clone())
-        })
+        self.grants
+            .get(grantee)
+            .and_then(|grants| grants.first().map(|grant| grant.grantee.clone()))
     }
 
     /// Returns every vesting schedule recorded for `grantee`.
@@ -666,7 +669,8 @@ mod tests {
     #[test]
     fn claim_before_cliff_is_zero() {
         let mut c = VestingContract::new("admin", "treasury");
-        c.add_grant("admin", "alice", 1000, 1000, 1000, 200).unwrap();
+        c.add_grant("admin", "alice", 1000, 1000, 1000, 200)
+            .unwrap();
         let claimed = c.claim("alice", 1100).expect("claim should not error");
         assert_eq!(claimed, 0);
         assert_eq!(c.balance_of("alice"), 0);
@@ -686,7 +690,8 @@ mod tests {
     #[test]
     fn revoke_claws_unvested_to_treasury() {
         let mut c = VestingContract::new("admin", "treasury");
-        c.add_grant("admin", "carol", 1000, 1000, 1000, 100).unwrap();
+        c.add_grant("admin", "carol", 1000, 1000, 1000, 100)
+            .unwrap();
         let _ = c.claim("carol", 1200).expect("claim should not error");
         assert_eq!(c.balance_of("contract"), 800);
         let transferred = c.revoke("admin", "carol", 1200).expect("revoke failed");

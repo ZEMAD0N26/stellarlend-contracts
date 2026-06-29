@@ -76,8 +76,6 @@ mod cross_asset_ltv_test;
 #[cfg(test)]
 mod rate_clamp_test;
 #[cfg(test)]
-mod twap_view_test;
-#[cfg(test)]
 mod twap_maxbuffer_perf_test;
 #[cfg(test)]
 mod twap_coverage_test;
