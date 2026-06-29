@@ -937,6 +937,9 @@ mod signer_cooldown_test;
 mod action_allowlist_test;
 
 #[cfg(test)]
+mod signer_shrink_guard_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
