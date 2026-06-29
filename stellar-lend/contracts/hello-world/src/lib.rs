@@ -90,6 +90,8 @@ mod rate_clamp_test;
 #[cfg(test)]
 mod twap_maxbuffer_perf_test;
 #[cfg(test)]
+mod twap_read_bench_test;
+#[cfg(test)]
 mod twap_coverage_test;
 #[cfg(test)]
 mod cross_asset_storage_doc_test;
@@ -1358,4 +1360,115 @@ impl HelloContract {
 mod test;
 
 #[cfg(test)]
-mod borrow_isolation_tier_test;
+mod amm_pause_integration_test;
+#[cfg(test)]
+mod claim_reserves_test;
+
+#[cfg(test)]
+mod gov_can_vote_test;
+// mod governance_test;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_borrow_and_repay() {
+        let (_env, client, _admin, user) = setup();
+        assert_eq!(client.borrow(&user, &200), 200);
+        assert_eq!(client.repay(&user, &75), 125);
+    }
+
+    #[test]
+    fn test_get_state_default() {
+        let (_env, client, _admin, user) = setup();
+        let s = client.get_state(&user);
+        assert_eq!(s.balance, 0);
+        assert_eq!(s.debt, 0);
+    }
+
+    #[test]
+    fn test_get_state_after_actions() {
+        let (_env, client, _admin, user) = setup();
+        client.deposit(&user, &500);
+        client.borrow(&user, &100);
+        let s = client.get_state(&user);
+        assert_eq!(s.balance, 500);
+        assert_eq!(s.debt, 100);
+    }
+
+    #[test]
+    fn test_deposit_rejects_zero_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.deposit(&user, &0);
+        }));
+        assert!(result.is_err(), "deposit should panic with zero amount");
+    }
+
+    #[test]
+    fn test_deposit_rejects_negative_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.deposit(&user, &-100);
+        }));
+        assert!(result.is_err(), "deposit should panic with negative amount");
+    }
+
+    #[test]
+    fn test_withdraw_rejects_zero_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.withdraw(&user, &0);
+        }));
+        assert!(result.is_err(), "withdraw should panic with zero amount");
+    }
+
+    #[test]
+    fn test_withdraw_rejects_negative_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.withdraw(&user, &-100);
+        }));
+        assert!(
+            result.is_err(),
+            "withdraw should panic with negative amount"
+        );
+    }
+
+    #[test]
+    fn test_borrow_rejects_zero_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.borrow(&user, &0);
+        }));
+        assert!(result.is_err(), "borrow should panic with zero amount");
+    }
+
+    #[test]
+    fn test_borrow_rejects_negative_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.borrow(&user, &-100);
+        }));
+        assert!(result.is_err(), "borrow should panic with negative amount");
+    }
+
+    #[test]
+    fn test_repay_rejects_zero_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.repay(&user, &0);
+        }));
+        assert!(result.is_err(), "repay should panic with zero amount");
+    }
+
+    #[test]
+    fn test_repay_rejects_negative_amount() {
+        let (_env, client, _admin, user) = setup();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.repay(&user, &-100);
+        }));
+        assert!(result.is_err(), "repay should panic with negative amount");
+    }
+}
