@@ -67,6 +67,10 @@ mod amm_integration_test;
 
 #[cfg(test)]
 mod cross_asset_decimals_test;
+
+#[cfg(test)]
+mod normalize_price_test;
+
 #[cfg(test)]
 mod rate_clamp_test;
 #[cfg(test)]
