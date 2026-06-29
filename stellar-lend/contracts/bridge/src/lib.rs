@@ -430,6 +430,13 @@ impl Bridge {
     /// Paused validator signatures are *silently skipped* — they are neither
     /// verified nor counted toward the quorum, and they do not cause the
     /// overall proof to fail.
+    ///
+    /// The supplied proof vector is attacker-influenced, so it is bounded before
+    /// any signature verification work runs. A proof cannot contain more
+    /// entries than there are unique validators in the current set, and each
+    /// signer public key may appear at most once. These checks cap verifier
+    /// work at O(current validator set size) and reject duplicate-laden proofs
+    /// before they can burn CPU on redundant signature checks.
     fn verify_quorum_proof(
         &self,
         new_set: &ValidatorSet,
@@ -438,6 +445,23 @@ impl Bridge {
     ) -> Result<()> {
         if proofs.is_empty() {
             return Err(anyhow!("empty proofs"));
+        }
+
+        let max_proofs = self.validators.len();
+        if proofs.len() > max_proofs {
+            return Err(anyhow!(
+                "quorum proof has {} entries but current validator set has {} unique validators",
+                proofs.len(),
+                max_proofs
+            ));
+        }
+
+        let mut seen_proof_signers: HashSet<Vec<u8>> = HashSet::new();
+        for (pk, _) in proofs.iter() {
+            let key_bytes = pk.to_bytes().to_vec();
+            if !seen_proof_signers.insert(key_bytes) {
+                return Err(anyhow!("quorum proof contains duplicate signer"));
+            }
         }
 
         // Domain-separated payload: bincode(domain_tag, bridge_id, new_set_bytes, epoch).
@@ -462,11 +486,6 @@ impl Bridge {
             // down the rest of the proof).
             let key_bytes = pk.to_bytes().to_vec();
             if self.paused_validators.contains(&key_bytes) {
-                continue;
-            }
-
-            // Deduplicate within the active subset.
-            if unique_active_signers.contains(&key_bytes) {
                 continue;
             }
 
@@ -529,20 +548,8 @@ impl Bridge {
             return Err(anyhow!("invalid epoch: must be current_epoch + 1"));
         }
 
-        // ── Validate new_set size bounds ──────────────────────────────────
-        let unique_count = new_set.len();
-        if unique_count < MIN_VALIDATORS {
-            return Err(anyhow!("{}", BridgeError::ValidatorSetTooSmall));
-        }
-        if unique_count > MAX_VALIDATORS {
-            return Err(anyhow!("{}", BridgeError::ValidatorSetTooLarge));
-        }
-
-        // ── Validate no duplicate keys ────────────────────────────────────
-        // We check the *raw* (pre-dedup) list.  The `len()` method deduplicates
-        // internally, but we also want to reject sets that contain any duplicate
-        // entries at all — they are never legitimate and always indicate an
-        // operator error.
+        // Reject raw duplicate keys before size checks so callers get the
+        // most specific error for malformed validator-set input.
         {
             let mut seen = std::collections::HashSet::new();
             for key_bytes in &new_set.validators {
@@ -550,6 +557,15 @@ impl Bridge {
                     return Err(anyhow!("{}", BridgeError::DuplicateValidatorKey));
                 }
             }
+        }
+
+        // ── Validate new_set size bounds ──────────────────────────────────
+        let unique_count = new_set.len();
+        if unique_count < MIN_VALIDATORS {
+            return Err(anyhow!("{}", BridgeError::ValidatorSetTooSmall));
+        }
+        if unique_count > MAX_VALIDATORS {
+            return Err(anyhow!("{}", BridgeError::ValidatorSetTooLarge));
         }
 
         // Compute churn: symmetric difference size between current set and new set.
@@ -883,6 +899,9 @@ mod rotation_test;
 
 #[cfg(test)]
 mod domain_separation_test;
+
+#[cfg(test)]
+mod quorum_proof_bound_test;
 
 #[cfg(test)]
 mod inbound_cap_test;
