@@ -369,7 +369,7 @@ mod signer_cooldown_test;
 mod action_allowlist_test;
 
 #[cfg(test)]
-mod signer_shrink_guard_test;
+mod upgrade_e2e_test;
 
 #[cfg(test)]
 mod tests {
