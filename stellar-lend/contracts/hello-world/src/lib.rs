@@ -80,6 +80,8 @@ mod twap_view_test;
 #[cfg(test)]
 mod twap_maxbuffer_perf_test;
 #[cfg(test)]
+mod twap_read_bench_test;
+#[cfg(test)]
 mod twap_coverage_test;
 #[cfg(test)]
 mod cross_asset_storage_doc_test;
